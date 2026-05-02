@@ -25,12 +25,15 @@ window._crypto = {
     for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
     return bytes;
   },
-  async deriveKey(pin, salt) {
+  // PBKDF2 iteration count is now stored in each blob so we can dial it down
+  // without breaking existing setups. New encryptions use 80k (snappy on
+  // mobile, ~150ms); legacy blobs without `it` field fall back to 250k.
+  async deriveKey(pin, salt, iterations) {
     const baseKey = await crypto.subtle.importKey(
       "raw", this.enc.encode(pin), { name: "PBKDF2" }, false, ["deriveKey"]
     );
     return crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt, iterations: 250000, hash: "SHA-256" },
+      { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
       baseKey,
       { name: "AES-GCM", length: 256 },
       false,
@@ -38,19 +41,21 @@ window._crypto = {
     );
   },
   async encrypt(pin, plaintext) {
+    const iterations = 80000;
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await this.deriveKey(pin, salt);
+    const key = await this.deriveKey(pin, salt, iterations);
     const ct = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv }, key, this.enc.encode(plaintext)
     );
-    return { salt: this.b64encode(salt), iv: this.b64encode(iv), ct: this.b64encode(ct) };
+    return { salt: this.b64encode(salt), iv: this.b64encode(iv), ct: this.b64encode(ct), it: iterations };
   },
   async decrypt(pin, blob) {
+    const iterations = blob.it || 250000; // legacy default
     const salt = this.b64decode(blob.salt);
     const iv = this.b64decode(blob.iv);
     const ct = this.b64decode(blob.ct);
-    const key = await this.deriveKey(pin, salt);
+    const key = await this.deriveKey(pin, salt, iterations);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
     return this.dec.decode(plain);
   }
@@ -2843,6 +2848,17 @@ async function unlockGist(pin, opts) {
   try {
     gistToken = await window._crypto.decrypt(pin, cfg.encryptedToken);
     gistId = cfg.gistId;
+    // Auto-migrate legacy high-iteration blobs to the new 80k iteration count.
+    // This is a one-shot per device — first unlock is slow (legacy 250k),
+    // we re-encrypt at 80k, every subsequent unlock is ~3× faster.
+    const currentIt = cfg.encryptedToken.it || 250000;
+    if (currentIt > 100000) {
+      try {
+        const newEnc = await window._crypto.encrypt(pin, gistToken);
+        setGistConfig({ encryptedToken: newEnc, gistId: gistId });
+        console.log("[gist] migrated encrypted token from", currentIt, "to 80k iterations");
+      } catch (e) { console.warn("[gist] re-encrypt for migration failed:", e); }
+    }
     hideUnlockOverlay();
     updateGistUI();
     await pullFromGist();
@@ -2902,16 +2918,25 @@ async function pullFromGist() {
       return;
     }
     const gist = await r.json();
+    // Successful GET = "Synced". Set this BEFORE any early returns so the
+    // saved-pill reflects the actual state regardless of whether there's
+    // new data to adopt. (Previously these early returns left gistLastSyncOk
+    // at null, so the pill said "Saved locally" forever.)
+    gistLastSyncOk = true;
+    gistLastSyncTime = Date.now();
+    gistLastError = "";
     const remoteUpdatedAt = new Date(gist.updated_at).getTime();
     const lastPulled = getLastPulledAt();
     const file = gist.files && gist.files[GIST_FILENAME];
     if (!file || !file.content || file.content === "{}") {
       // Empty gist — push our current state so it has something
+      console.log("[gist] gist empty, pushing initial state");
       await pushToGist(true);
       return;
     }
     if (remoteUpdatedAt <= lastPulled) {
       // No new changes since last pull — nothing to do
+      console.log("[gist] no new remote changes (updated_at unchanged)");
       return;
     }
     // GitHub truncates large files; fetch raw_url if needed
@@ -4531,18 +4556,16 @@ document.getElementById("autoUnlockGoBtn").addEventListener("click", async () =>
 document.getElementById("autoUnlockPin").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("autoUnlockGoBtn").click();
 });
-// Auto-attempt unlock as the user types — no need to press Enter. Debounced
-// 250ms so we don't fire mid-keystroke. Silent failures on wrong PIN; once
-// the correct PIN is fully typed, the overlay dismisses automatically.
-let _pinAutoTryTimer = null;
-document.getElementById("autoUnlockPin").addEventListener("input", e => {
-  if (_pinAutoTryTimer) clearTimeout(_pinAutoTryTimer);
+// Auto-attempt unlock as the user types — fires immediately on every
+// keystroke once the PIN is at least 4 chars long. Multiple in-flight
+// decrypt attempts are cheap and harmless (Web Crypto runs off-thread);
+// only the successful one dismisses the overlay. Silent failures on
+// wrong PIN — no toast spam while typing.
+document.getElementById("autoUnlockPin").addEventListener("input", async e => {
   const pin = e.target.value;
   if (pin.length < 4) return;
-  _pinAutoTryTimer = setTimeout(async () => {
-    const ok = await unlockGist(pin, { silent: true });
-    if (ok) e.target.value = "";
-  }, 250);
+  const ok = await unlockGist(pin, { silent: true });
+  if (ok) e.target.value = "";
 });
 document.getElementById("autoUnlockSkipBtn").addEventListener("click", () => {
   hideUnlockOverlay();
