@@ -1323,26 +1323,23 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     display: block;
   }
 
-  /* Personal-tab side panel: hidden on work, side-by-side with the task
-     table on personal. Holds the shopping + grocery lists. */
+  /* Personal-tab side panel: lives BELOW the task list. Two boxes side by
+     side (Shopping | Grocery), each in its own card. Hidden on Work tab. */
   .personal-sidebar { display: none; }
-  body.context-personal .layout {
-    display: grid;
-    grid-template-columns: 1fr 260px;
-    gap: 16px;
-    align-items: start;
-  }
   body.context-personal .personal-sidebar {
-    display: block;
+    display: flex;
+    gap: 14px;
+    margin-top: 18px;
+    align-items: flex-start;
+  }
+  .personal-sidebar .side-list-section {
+    flex: 1;
+    min-width: 0;
     background: white;
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 14px;
+    padding: 14px 16px;
     box-shadow: var(--shadow);
-    position: sticky;
-    top: 12px;
-    max-height: calc(100vh - 24px);
-    overflow-y: auto;
   }
   .personal-sidebar h3 {
     margin: 0 0 8px;
@@ -1350,11 +1347,6 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-weight: 700;
     color: var(--blue-1);
     letter-spacing: 0.3px;
-  }
-  .personal-sidebar .side-list-section + .side-list-section {
-    margin-top: 18px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border);
   }
   .personal-sidebar .side-list {
     list-style: none;
@@ -1369,7 +1361,27 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-size: 13px;
     border-radius: 4px;
   }
-  .personal-sidebar .side-list li:hover { background: var(--bg-soft); }
+  .personal-sidebar .side-list li:hover:not(.grocery-category-header) { background: var(--bg-soft); }
+  .personal-sidebar .side-list li.dragging { opacity: 0.4; }
+  .personal-sidebar .side-list li.drag-over:not(.grocery-category-header) {
+    box-shadow: inset 0 2px 0 var(--blue-1);
+  }
+  .personal-sidebar .side-list li:not(.grocery-category-header) { cursor: grab; }
+  .personal-sidebar .side-list li:not(.grocery-category-header):active { cursor: grabbing; }
+  /* Category header rows in the grocery list — non-interactive label that
+     groups the items in store-walking order. */
+  .personal-sidebar .side-list li.grocery-category-header {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--blue-1);
+    background: transparent;
+    padding: 8px 4px 2px;
+    pointer-events: none;
+    border-bottom: 1px solid var(--blue-3);
+    margin-bottom: 2px;
+  }
   .personal-sidebar .side-list li input[type="checkbox"] {
     margin: 0;
     flex-shrink: 0;
@@ -1415,14 +1427,17 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     background: white;
     border-style: solid;
   }
-  /* Mobile: sidebar drops below the task list at the responsive breakpoint */
+  /* On the iPad/laptop responsive breakpoint, the .container becomes a flex
+     column with `order:` rules. The sidebar needs an order ≥ 6 so it sits
+     below the task table instead of getting placed at order:0 (default).
+     We DON'T stack the two cards here — only stack on actual phone widths. */
   @media (max-width: 1280px) {
-    body.context-personal .layout {
-      grid-template-columns: 1fr;
-    }
+    .personal-sidebar { order: 6; margin-top: 14px; }
+  }
+  /* Phone: not enough horizontal room for two boxes side-by-side, so stack */
+  @media (max-width: 640px) {
     body.context-personal .personal-sidebar {
-      position: static;
-      max-height: none;
+      flex-direction: column;
     }
   }
   .sidebar {
@@ -2007,24 +2022,25 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       <div id="taskList"></div>
     </div>
 
-    <aside class="personal-sidebar" id="personalSidebar">
-      <div class="side-list-section" data-list="shopping">
-        <h3>🛍 Shopping</h3>
-        <ul class="side-list" id="shoppingListEl"></ul>
-        <div class="side-list-add">
-          <input type="text" id="shoppingAddInput" placeholder="Add item…">
-        </div>
-      </div>
-      <div class="side-list-section" data-list="grocery">
-        <h3>🥑 Grocery</h3>
-        <ul class="side-list" id="groceryListEl"></ul>
-        <div class="side-list-add">
-          <input type="text" id="groceryAddInput" placeholder="Add item…">
-        </div>
-      </div>
-    </aside>
-
   </div>
+
+  <aside class="personal-sidebar" id="personalSidebar">
+    <div class="side-list-section" data-list="shopping">
+      <h3>🛍 Shopping</h3>
+      <ul class="side-list" id="shoppingListEl"></ul>
+      <div class="side-list-add">
+        <input type="text" id="shoppingAddInput" placeholder="Add item…">
+      </div>
+    </div>
+    <div class="side-list-section" data-list="grocery">
+      <h3>🥑 Grocery</h3>
+      <ul class="side-list" id="groceryListEl"></ul>
+      <div class="side-list-add">
+        <input type="text" id="groceryAddInput" placeholder="Add item…">
+      </div>
+    </div>
+  </aside>
+
 </div>
 
 <script>
@@ -2487,25 +2503,133 @@ function getSubtasks(parentId, includeDeleted = false) {
 }
 
 // ---------------- Personal-tab side lists (shopping + grocery) ----------------
+// Grocery items are auto-categorized so the rendered list mirrors the order
+// you walk through the store. Each category has a list of keywords; the
+// longest matching keyword wins (so "tortilla chip" → Snacks, not Bread).
+const GROCERY_CATEGORY_ORDER = [
+  "Bread", "Fruit", "Herbs", "Vegetables", "Meat & Fish",
+  "Yogurt", "Milk", "Eggs", "Cheese", "Frozen",
+  "Baking", "South American", "Asian", "Dry goods / Pasta",
+  "Snacks", "Paper products", "Toiletries", "Other"
+];
+const GROCERY_CATEGORIES = {
+  "Bread":             ["bread", "bagel", "baguette", "roll", "rolls", "bun", "buns", "pita", "naan", "tortilla", "tortillas", "croissant", "english muffin", "muffin", "sourdough", "loaf", "ciabatta", "focaccia"],
+  "Fruit":             ["apple", "apples", "banana", "bananas", "berry", "berries", "strawberry", "strawberries", "blueberry", "blueberries", "raspberry", "raspberries", "blackberry", "blackberries", "orange", "oranges", "lemon", "lemons", "lime", "limes", "grape", "grapes", "melon", "watermelon", "cantaloupe", "honeydew", "peach", "peaches", "pear", "pears", "pineapple", "mango", "mangos", "kiwi", "cherry", "cherries", "plum", "plums", "grapefruit", "fruit", "clementine", "tangerine", "papaya", "pomegranate", "fig", "apricot", "nectarine"],
+  "Herbs":             ["basil", "parsley", "cilantro", "dill", "mint", "rosemary", "thyme", "sage", "chives", "oregano", "tarragon", "herbs"],
+  "Vegetables":        ["tomato", "tomatoes", "lettuce", "spinach", "kale", "broccoli", "cauliflower", "carrot", "carrots", "celery", "onion", "onions", "garlic", "pepper", "peppers", "bell pepper", "cucumber", "cucumbers", "zucchini", "squash", "potato", "potatoes", "sweet potato", "mushroom", "mushrooms", "asparagus", "brussels", "cabbage", "corn", "peas", "ginger", "leek", "leeks", "scallion", "green onion", "radish", "beet", "eggplant", "artichoke", "arugula", "romaine", "salad", "salad mix", "avocado", "avocados", "veggies", "vegetable", "vegetables", "veg"],
+  "Meat & Fish":       ["chicken", "beef", "pork", "lamb", "turkey", "sausage", "bacon", "ham", "ground beef", "ground turkey", "ground", "steak", "ribs", "hot dog", "hot dogs", "salami", "pepperoni", "salmon", "tuna", "shrimp", "fish", "cod", "tilapia", "halibut", "scallop", "scallops", "deli", "meat"],
+  "Yogurt":            ["yogurt", "yoghurt", "kefir", "greek yogurt"],
+  "Milk":              ["milk", "almond milk", "oat milk", "soy milk", "half and half", "cream", "heavy cream", "whipping cream"],
+  "Eggs":              ["egg", "eggs"],
+  "Cheese":            ["cheese", "cheddar", "mozzarella", "parmesan", "feta", "ricotta", "brie", "swiss", "gouda", "blue cheese", "goat cheese", "cottage cheese", "cream cheese", "string cheese", "butter"],
+  "Frozen":            ["frozen", "ice cream", "popsicle", "popsicles", "frozen pizza", "frozen veggies", "frozen vegetables", "frozen fruit", "frozen meal"],
+  "Baking":            ["flour", "sugar", "brown sugar", "powdered sugar", "baking soda", "baking powder", "vanilla", "vanilla extract", "chocolate chip", "chocolate chips", "cocoa", "cocoa powder", "yeast", "olive oil", "vegetable oil", "canola oil", "coconut oil", "vinegar", "balsamic", "salt", "sea salt"],
+  "South American":    ["salsa", "tortilla chip", "tortilla chips", "queso", "jalapeño", "jalapeno", "guacamole", "masa", "refried beans", "taco", "taco shell", "burrito", "enchilada", "chipotle", "mole"],
+  "Asian":             ["soy sauce", "sriracha", "fish sauce", "miso", "sesame", "sesame oil", "rice noodle", "rice noodles", "ramen", "nori", "kimchi", "sake", "rice vinegar", "hoisin", "oyster sauce", "gochujang", "wasabi", "sushi rice", "tofu", "tempeh"],
+  "Dry goods / Pasta": ["pasta", "spaghetti", "penne", "rigatoni", "fettuccine", "linguine", "macaroni", "lasagna", "rice", "white rice", "brown rice", "oats", "oatmeal", "cereal", "granola", "quinoa", "couscous", "lentil", "lentils", "bean", "beans", "canned", "peanut butter", "almond butter", "jam", "jelly", "honey", "maple syrup", "bread crumb", "bread crumbs", "noodle", "noodles"],
+  "Snacks":            ["chip", "chips", "cracker", "crackers", "cookie", "cookies", "candy", "chocolate", "popcorn", "pretzel", "pretzels", "trail mix", "granola bar", "granola bars", "fruit snack", "snack", "snacks", "nut", "nuts", "almond", "almonds", "cashew", "cashews", "peanut", "peanuts"],
+  "Paper products":    ["toilet paper", "paper towel", "paper towels", "napkin", "napkins", "tissue", "tissues", "paper plate", "paper plates", "foil", "aluminum foil", "plastic wrap", "saran wrap", "ziploc", "trash bag", "trash bags", "garbage bag", "parchment paper"],
+  "Toiletries":        ["shampoo", "conditioner", "soap", "body wash", "toothpaste", "toothbrush", "deodorant", "razor", "razors", "tampon", "tampons", "pad", "pads", "lotion", "sunscreen", "makeup", "q-tip", "q-tips", "cotton ball", "cotton balls", "floss", "lip balm", "chapstick", "moisturizer", "face wash"],
+};
+// Build a flat keyword list sorted longest-first, so "tortilla chip" beats
+// "tortilla" when categorizing "tortilla chips."
+const _GROCERY_KW_LIST = (() => {
+  const all = [];
+  for (const [cat, kws] of Object.entries(GROCERY_CATEGORIES)) {
+    for (const kw of kws) all.push({ kw: kw.toLowerCase(), cat });
+  }
+  all.sort((a, b) => b.kw.length - a.kw.length);
+  return all;
+})();
+function categorizeGroceryItem(text) {
+  if (!text) return "Other";
+  const lower = text.toLowerCase();
+  for (const { kw, cat } of _GROCERY_KW_LIST) {
+    const re = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(lower)) return cat;
+  }
+  return "Other";
+}
+
 function renderSideLists() {
-  const renderOne = (listEl, items, listKey) => {
-    if (!listEl) return;
-    listEl.innerHTML = items.map((item, i) => `
-      <li class="${item.done ? 'done' : ''}" data-list="${listKey}" data-idx="${i}">
+  // Shopping list: simple flat render in insertion order — no categorization.
+  const shopEl = document.getElementById('shoppingListEl');
+  if (shopEl) {
+    shopEl.innerHTML = shoppingList.map((item, i) => `
+      <li class="${item.done ? 'done' : ''}" data-list="shopping" data-idx="${i}">
         <input type="checkbox" ${item.done ? 'checked' : ''}>
         <span class="side-item-text" contenteditable="true">${escapeHtml(item.text || '')}</span>
         <button class="side-item-delete" title="Remove">×</button>
       </li>
     `).join('');
-  };
-  renderOne(document.getElementById('shoppingListEl'), shoppingList, 'shopping');
-  renderOne(document.getElementById('groceryListEl'), groceryList, 'grocery');
+  }
+  // Grocery list: group by category, render in store-walking order, with
+  // a small header row for each non-empty category.
+  const grocEl = document.getElementById('groceryListEl');
+  if (grocEl) {
+    const groups = {};
+    groceryList.forEach((item, idx) => {
+      const cat = categorizeGroceryItem(item.text);
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push({ ...item, idx });
+    });
+    grocEl.innerHTML = GROCERY_CATEGORY_ORDER
+      .filter(cat => groups[cat] && groups[cat].length)
+      .map(cat => `
+        <li class="grocery-category-header">${cat}</li>
+        ${groups[cat].map(item => `
+          <li class="${item.done ? 'done' : ''}" data-list="grocery" data-idx="${item.idx}">
+            <input type="checkbox" ${item.done ? 'checked' : ''}>
+            <span class="side-item-text" contenteditable="true">${escapeHtml(item.text || '')}</span>
+            <button class="side-item-delete" title="Remove">×</button>
+          </li>
+        `).join('')}
+      `).join('');
+  }
 
-  // Wire per-item handlers
-  document.querySelectorAll('.personal-sidebar .side-list li').forEach(li => {
+  // Wire per-item handlers — skip category-header rows (no data-list / data-idx).
+  document.querySelectorAll('.personal-sidebar .side-list li:not(.grocery-category-header)').forEach(li => {
     const listKey = li.dataset.list;
     const idx = Number(li.dataset.idx);
+    if (!listKey || isNaN(idx)) return;
     const items = listKey === 'shopping' ? shoppingList : groceryList;
+    // Drag-and-drop reorder. Same-list only — moving across shopping/grocery
+    // is intentionally disallowed (different lists). For grocery, reorder
+    // within the array still works; the visual sort by category still applies
+    // on render, so cross-category drags appear to snap back to the right
+    // section. Within-category drags persist their visual order.
+    li.setAttribute('draggable', 'true');
+    li.addEventListener('dragstart', e => {
+      window._dragSrc = { list: listKey, idx };
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers require setData to start a drag
+      try { e.dataTransfer.setData('text/plain', String(idx)); } catch {}
+    });
+    li.addEventListener('dragend', () => {
+      li.classList.remove('dragging');
+      document.querySelectorAll('.side-list li.drag-over').forEach(x => x.classList.remove('drag-over'));
+      window._dragSrc = null;
+    });
+    li.addEventListener('dragover', e => {
+      if (!window._dragSrc || window._dragSrc.list !== listKey) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      li.classList.add('drag-over');
+    });
+    li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+    li.addEventListener('drop', async e => {
+      e.preventDefault();
+      li.classList.remove('drag-over');
+      const src = window._dragSrc;
+      if (!src || src.list !== listKey || src.idx === idx) return;
+      const arr = listKey === 'shopping' ? shoppingList : groceryList;
+      const [moved] = arr.splice(src.idx, 1);
+      let insertAt = idx > src.idx ? idx - 1 : idx;
+      arr.splice(insertAt, 0, moved);
+      await persist();
+      renderSideLists();
+    });
     const cb = li.querySelector('input[type="checkbox"]');
     const text = li.querySelector('.side-item-text');
     const del = li.querySelector('.side-item-delete');
