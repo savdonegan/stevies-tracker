@@ -684,7 +684,21 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     letter-spacing: 0.5px;
     color: var(--blue-1);
     text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
+  .new-task-header:hover { color: #1f5a6b; }
+  .new-task-header::before {
+    content: "▼";
+    font-size: 9px;
+    transition: transform 0.15s;
+  }
+  .new-task-box.collapsed .new-task-header { margin: 0; }
+  .new-task-box.collapsed .new-task-header::before { transform: rotate(-90deg); }
+  .new-task-box.collapsed .new-task-box-scroll { display: none; }
   .new-task-box .grid-row.add-row {
     padding: 0;
     border-bottom: none;
@@ -917,7 +931,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   body.context-personal [data-col="next"],
   body.context-personal [data-col="email"],
   body.context-personal [data-col="doc"] {
-    display: none;
+    display: none !important;
   }
 
   /* Column resize handles (live in the sort header) */
@@ -1093,15 +1107,17 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     background: var(--blue-1);
     color: white;
     border: none;
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
+    width: 100%;
+    min-width: 44px;
+    height: 36px;
+    border-radius: 8px;
     font-size: 18px;
     cursor: pointer;
     line-height: 1;
     display: flex;
     align-items: center;
     justify-content: center;
+    font-weight: 600;
   }
   .add-btn:hover { background: var(--blue-2); }
   .add-btn:disabled { background: #c9c2da; cursor: not-allowed; }
@@ -1511,10 +1527,150 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   @media (max-width: 1280px) {
     .personal-sidebar { order: 6; margin-top: 14px; }
   }
-  /* Phone: not enough horizontal room for two boxes side-by-side, so stack */
-  @media (max-width: 640px) {
+  /* Mobile / tablet: stack shopping + grocery vertically (full-width each)
+     instead of side-by-side. Side-by-side cards on a phone or iPad portrait
+     squeeze the lists too narrow to be useful. */
+  @media (max-width: 1024px) {
     body.context-personal .personal-sidebar {
       flex-direction: column;
+    }
+    .personal-sidebar .side-list-section { width: 100%; }
+  }
+
+  /* Cards layout for any viewport that can't comfortably show all the columns
+     in a single row (≤1024px catches iPad portrait, narrow laptops, all phones).
+     This is the "never any scrollbar, just reformat" mode the user wants. */
+  @media (max-width: 1024px) {
+
+    /* MOBILE TASK ROWS — full-width cards, no horizontal scroll. Each task
+       collapses to status + title + due + customer chip. Tapping the row
+       (anywhere not on a control) toggles "mobile-expanded" which reveals
+       all the other fields stacked vertically inside the card. */
+    .task-table { overflow-x: visible !important; }
+    .task-table > .grid-row,
+    .task-table #taskList .grid-row { min-width: 0 !important; }
+
+    .task-row {
+      display: block !important;
+      grid-template-columns: none !important;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px !important;
+      margin-bottom: 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      position: relative;
+    }
+    .task-row.subtask-row {
+      margin-left: 16px;
+      padding-left: 12px !important;
+      border-left: 3px solid var(--blue-2);
+    }
+    /* Inside each card, lay cells out as block items */
+    .task-row [data-col] {
+      display: block;
+      padding: 3px 0;
+      width: 100%;
+    }
+    /* Collapsed state: hide most fields, show only the essentials */
+    .task-row:not(.mobile-expanded) [data-col="importance"],
+    .task-row:not(.mobile-expanded) [data-col="repeat"],
+    .task-row:not(.mobile-expanded) [data-col="next"],
+    .task-row:not(.mobile-expanded) [data-col="notes"],
+    .task-row:not(.mobile-expanded) [data-col="email"],
+    .task-row:not(.mobile-expanded) [data-col="doc"],
+    .task-row:not(.mobile-expanded) [data-col="delete"] {
+      display: none;
+    }
+    /* Compact header row inside the card: status + due side-by-side */
+    .task-row [data-col="status"],
+    .task-row [data-col="due"] {
+      display: inline-block;
+      width: auto;
+      vertical-align: middle;
+    }
+    .task-row [data-col="status"] { margin-right: 8px; }
+    .task-row [data-col="status"] .status-select { width: auto; min-width: 90px; }
+    .task-row [data-col="due"] .due-input { width: auto; max-width: 130px; }
+
+    /* Task title styled prominently */
+    .task-row [data-col="task"] { padding-top: 6px; }
+    .task-row [data-col="task"] .task-text {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .task-row .add-subtask-hover { display: none; } /* + button hidden on mobile */
+
+    /* Customer chip inline below title */
+    .task-row [data-col="customer"] { padding: 2px 0 4px; }
+    .task-row [data-col="customer"] .customer-chip { display: inline-flex; }
+
+    /* When expanded: small section labels for clarity */
+    .task-row.mobile-expanded [data-col]::before {
+      content: attr(data-col);
+      display: block;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+    .task-row.mobile-expanded [data-col="status"]::before,
+    .task-row.mobile-expanded [data-col="task"]::before,
+    .task-row.mobile-expanded [data-col="due"]::before,
+    .task-row.mobile-expanded [data-col="customer"]::before { content: none; } /* keep top row clean */
+    /* Force the expanded fields back to full-width block */
+    .task-row.mobile-expanded [data-col="importance"],
+    .task-row.mobile-expanded [data-col="repeat"],
+    .task-row.mobile-expanded [data-col="owner"],
+    .task-row.mobile-expanded [data-col="next"],
+    .task-row.mobile-expanded [data-col="notes"],
+    .task-row.mobile-expanded [data-col="email"],
+    .task-row.mobile-expanded [data-col="doc"] {
+      display: block;
+      padding: 6px 0 2px;
+    }
+    .task-row.mobile-expanded [data-col="delete"] {
+      display: flex;
+      padding-top: 8px;
+      gap: 12px;
+    }
+
+    /* Add-task row also stacks vertically as a single column */
+    .new-task-box .grid-row.add-row {
+      display: flex !important;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .new-task-box .grid-row.add-row > * { width: 100%; }
+    .new-task-box .grid-row.add-row [data-col="email"],
+    .new-task-box .grid-row.add-row [data-col="doc"] { display: flex; gap: 6px; }
+
+    /* Sort header is meaningless when rows are cards — hide it on mobile */
+    .grid-row.header.sort-header { display: none; }
+
+    /* Hint that rows are tappable: subtle pointer cursor + faint shadow on hover */
+    .task-row { cursor: pointer; }
+    .task-row.mobile-expanded {
+      box-shadow: 0 2px 8px rgba(42, 121, 134, 0.18);
+      border-color: var(--blue-2);
+    }
+
+    /* Settings panel customer rows — stack vertically for legibility */
+    .colors-panel .cp-row,
+    .colors-panel #colorsPanelList > div {
+      display: flex !important;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      align-items: stretch !important;
+    }
+    .colors-panel #colorsPanelList input,
+    .colors-panel #colorsPanelList select,
+    .colors-panel #colorsPanelList button {
+      width: 100%;
     }
   }
   .sidebar {
@@ -1762,10 +1918,9 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       padding: 4px 8px;
     }
 
-    /* Make the table its own scroll container; the rows inside keep their full width */
-    .task-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .task-table > .grid-row { min-width: 1100px; }
-    .task-table #taskList .grid-row { min-width: 1100px; }
+    /* Never horizontally scroll. The card layout (next breakpoint) takes over
+       below 1024px and re-renders rows as full-width cards instead. */
+    .task-table { overflow-x: visible; }
     .filters { grid-template-columns: 1fr; }
 
     /* Search row + toggle pills: stack neatly, never overflow off-screen */
@@ -1780,16 +1935,11 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       min-width: 0;
     }
 
-    /* New-task box: keep its grid row at full width (so buttons align to their columns)
-       and scroll horizontally inside its own container. */
-    .new-task-box { overflow: hidden; padding: 14px 0; }
-    .new-task-box .new-task-header { padding: 0 18px 10px; }
-    .new-task-box-scroll {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 0 18px;
-    }
-    .new-task-box .grid-row.add-row { min-width: 1100px; }
+    /* New-task box: at this breakpoint, the add-row stacks vertically (handled
+       by the ≤1024px rules below). No horizontal scroll, no min-width. */
+    .new-task-box { overflow: visible; padding: 14px 18px; }
+    .new-task-box-scroll { overflow: visible; padding: 0; }
+    .new-task-box .grid-row.add-row { min-width: 0; }
   }
 
   /* iPhone — increase touch targets, simplify layout. */
@@ -1802,9 +1952,14 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     .quick-capture input { font-size: 14px; padding: 12px 14px; }
     .toggle-pill { font-size: 11px; padding: 5px 10px; }
     .delete-btn, .email-icon, .add-btn { min-width: 32px; min-height: 32px; }
-    .task-table > #taskList .grid-row { min-width: 980px; }
-    .task-table > .grid-row { min-width: 980px; }
-    .new-task-box .grid-row.add-row { min-width: 980px; }
+    /* Force every row to fit the viewport — no horizontal scroll, no fixed
+       min-widths. The 1024px breakpoint already converts task rows to cards,
+       which is what actually displays here. The earlier `min-width: 980px`
+       declarations were leftovers from the table-scroll era and re-introduced
+       a scroll bar when the cards layout would have fit. */
+    .task-table > #taskList .grid-row,
+    .task-table > .grid-row,
+    .new-task-box .grid-row.add-row { min-width: 0 !important; }
     .sidebar { padding: 10px 12px; }
     .filename-pill { font-size: 11px; }
   }
@@ -1891,8 +2046,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <input type="text" id="quickCapture" placeholder="✨ Brain dump — type a task and press Enter to capture (fill in details later)">
   </div>
 
-  <div class="new-task-box">
-    <h3 class="new-task-header">+ New Task</h3>
+  <div class="new-task-box collapsed" id="newTaskBox">
+    <h3 class="new-task-header" id="newTaskHeader" role="button" tabindex="0">+ New Task…</h3>
     <div class="new-task-box-scroll">
     <div class="grid-row add-row" id="addRow">
       <select id="newStatus" class="status-select status-incomplete" title="Status" data-col="status">
@@ -2296,6 +2451,7 @@ let _justResortedId = null;  // used to flash a row that just moved due to impor
 let searchQuery = "";        // current search text (lowercased)
 let expandedSubtaskIds = new Set(); // which task rows have their subtask drawer open
 let collapsedGroupKeys = new Set(); // which date-group sections are collapsed (session-only)
+let mobileExpandedTaskId = null;    // which task row is expanded on mobile (one at a time)
 let fileHandle = null;
 let needsReconnect = false;
 let saveError = null; // populated when saveToFile throws — surfaces in the Saved pill
@@ -3568,6 +3724,39 @@ function render() {
   // bind handlers
   list.querySelectorAll(".task-row").forEach(row => {
     const id = row.dataset.id;
+    // Mobile expand-on-tap. Triggers on:
+    //   • clicks anywhere on the row (white space, status pill, etc.)
+    //   • clicks on the task description specifically — which ALSO refocuses
+    //     the contenteditable after the re-render so the user can immediately
+    //     start typing without a second tap
+    // Skips clicks on other controls (selects, due picker, etc.) that have
+    // their own meaning. Only honored on narrow viewports.
+    row.addEventListener("click", e => {
+      if (window.matchMedia("(min-width: 1025px)").matches) return;
+      const inTaskText = !!e.target.closest(".task-text");
+      // Don't toggle on form controls except the task-text contenteditable
+      if (!inTaskText && e.target.closest("select, input, textarea, button, [contenteditable=true], .customer-chip")) return;
+      const wasExpanded = mobileExpandedTaskId === id;
+      mobileExpandedTaskId = wasExpanded ? null : id;
+      render();
+      // After re-render, if the user tapped the task text and the row is now
+      // expanded, refocus the contenteditable so they can type immediately.
+      if (inTaskText && !wasExpanded) {
+        requestAnimationFrame(() => {
+          const fresh = document.querySelector(`.task-row[data-id="${id}"] .task-text`);
+          if (fresh) {
+            fresh.focus();
+            // Place caret at end of existing text
+            const range = document.createRange();
+            range.selectNodeContents(fresh);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        });
+      }
+    });
     row.querySelector(".status-select").addEventListener("change", async e => {
       const t = tasks.find(x => x.id === id);
       if (!t) return;
@@ -4234,6 +4423,7 @@ function taskRowHtml(t, opts2) {
   const overdueClass = (t.status !== "Complete" && isOverdue(t.due)) ? "overdue" : "";
   const resortedClass = (t.id === _justResortedId) ? "just-resorted" : "";
   const subtaskClass = isSubtask ? "subtask-row" : "";
+  const mobileExpClass = (t.id === mobileExpandedTaskId) ? "mobile-expanded" : "";
   const statusClass = t.status === "Complete" ? "status-complete"
                     : t.status === "Waiting for response" ? "status-waiting"
                     : "status-incomplete";
@@ -4254,7 +4444,7 @@ function taskRowHtml(t, opts2) {
     }
   }
   return `
-    <div class="grid-row task-row ${subtaskClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass}" data-id="${t.id}">
+    <div class="grid-row task-row ${subtaskClass} ${mobileExpClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass}" data-id="${t.id}">
       <div class="status-cell" data-col="status">
         <select class="status-select ${statusClass}" title="${escapeHtml(t.status || "Incomplete")}">
           <option ${t.status === "Incomplete" ? "selected" : ""}>Incomplete</option>
@@ -4398,6 +4588,9 @@ async function addTask() {
   pendingDocLink = "";
   setNewLinkButtonState();
   setNewDocButtonState();
+  // Auto-collapse the form back to just the "+ New Task" header
+  const ntBox = document.getElementById("newTaskBox");
+  if (ntBox) ntBox.classList.add("collapsed");
 
   await persist();
   render();
@@ -4462,6 +4655,19 @@ window.addEventListener("drop", e => e.preventDefault());
 document.getElementById("connectBtn").addEventListener("click", connectNewFile);
 document.getElementById("reconnectBtn").addEventListener("click", reconnect);
 document.getElementById("addBtn").addEventListener("click", addTask);
+
+// "+ New Task" header is a toggle: click to expand/collapse the form. Default
+// state is collapsed (just the header). Form auto-collapses after a successful
+// submit so the user has a clean state for the next task.
+document.getElementById("newTaskHeader").addEventListener("click", () => {
+  document.getElementById("newTaskBox").classList.toggle("collapsed");
+});
+document.getElementById("newTaskHeader").addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    document.getElementById("newTaskHeader").click();
+  }
+});
 
 // ---------------- Column resizing & row density ----------------
 const COL_NAMES = ["status","importance","due","repeat","owner","task","customer","next","notes","email","doc","delete"];
