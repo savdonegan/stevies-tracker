@@ -2502,17 +2502,26 @@ function saveLocal() {
   customersByContext[currentContext] = customers.slice();
   customerColorsByContext[currentContext] = { ...customerColors };
   customerAliasesByContext[currentContext] = JSON.parse(JSON.stringify(customerAliases));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    tasks,
-    customersByContext,
-    customerColorsByContext,
-    customerAliasesByContext,
-    customNames,
-    defaultOwner,
-    shoppingList,
-    groceryList,
-    savedAt: new Date().toISOString()
-  }));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      tasks,
+      customersByContext,
+      customerColorsByContext,
+      customerAliasesByContext,
+      customNames,
+      defaultOwner,
+      shoppingList,
+      groceryList,
+      savedAt: new Date().toISOString()
+    }));
+  } catch (err) {
+    // QuotaExceededError, SecurityError (incognito), etc. — surface but
+    // don't crash. The in-memory state remains accurate; cloud sync may
+    // still work. Without this guard, a saveLocal failure would propagate
+    // up through persist() and break whatever triggered the save.
+    console.error("[saveLocal] localStorage write failed:", err);
+    showToast("⚠ Local save failed: " + (err.message || err.name || "unknown"));
+  }
 }
 function loadLocal() {
   try {
@@ -2803,14 +2812,20 @@ function getGistConfig() {
   catch { return null; }
 }
 function setGistConfig(cfg) {
-  if (cfg) localStorage.setItem(GIST_CONFIG_KEY, JSON.stringify(cfg));
-  else localStorage.removeItem(GIST_CONFIG_KEY);
+  try {
+    if (cfg) localStorage.setItem(GIST_CONFIG_KEY, JSON.stringify(cfg));
+    else localStorage.removeItem(GIST_CONFIG_KEY);
+  } catch (err) {
+    console.error("[setGistConfig] localStorage write failed:", err);
+    showToast("⚠ Couldn't save sync config: " + (err.message || err.name));
+  }
 }
 function getLastPulledAt() {
   return Number(localStorage.getItem(GIST_LAST_PULL_KEY)) || 0;
 }
 function setLastPulledAt(ms) {
-  localStorage.setItem(GIST_LAST_PULL_KEY, String(ms));
+  try { localStorage.setItem(GIST_LAST_PULL_KEY, String(ms)); }
+  catch (err) { console.warn("[setLastPulledAt] failed:", err); }
 }
 
 async function setupGist(token, gid, pin) {
@@ -2873,10 +2888,14 @@ async function unlockGist(pin, opts) {
 
 function clearGistConfig() {
   if (!confirm("Disconnect GitHub Gist sync? Your tasks stay in browser storage; the encrypted token is removed from this device. The gist on GitHub is untouched.")) return;
+  // Cancel any pending debounced push so it doesn't fire with stale credentials
+  if (gistPushTimer) { clearTimeout(gistPushTimer); gistPushTimer = null; }
   setGistConfig(null);
   localStorage.removeItem(GIST_LAST_PULL_KEY);
   gistToken = "";
   gistId = "";
+  gistLastSyncOk = null;
+  gistLastError = "";
   showToast("Disconnected");
   updateGistUI();
 }
@@ -2959,7 +2978,38 @@ async function pullFromGist() {
     if (typeof remote.defaultOwner === "string") defaultOwner = remote.defaultOwner;
     if (Array.isArray(remote.shoppingList)) shoppingList = remote.shoppingList;
     if (Array.isArray(remote.groceryList)) groceryList = remote.groceryList;
-    migrateContextSchema(remote);
+    // Customers list: still replace (so add/remove propagates).
+    if (remote.customersByContext) {
+      customersByContext = {
+        work: Array.isArray(remote.customersByContext.work) ? remote.customersByContext.work.slice() : customersByContext.work,
+        personal: Array.isArray(remote.customersByContext.personal) ? remote.customersByContext.personal.slice() : customersByContext.personal
+      };
+    } else if (Array.isArray(remote.customers)) {
+      // Legacy single-list shape — treat as work
+      customersByContext = { work: remote.customers.slice(), personal: customersByContext.personal };
+    }
+    // Colors and aliases: MERGE remote into local, never wipe. If a device
+    // pushes incomplete data (e.g., a fresh device whose colors haven't
+    // populated yet), we don't want it to nuke colors from other devices.
+    // Worst case: an old removed color persists as an orphan — harmless,
+    // doesn't render anywhere since the customer no longer exists.
+    const mergeColors = (localBucket, remoteBucket) => {
+      if (remoteBucket && typeof remoteBucket === "object") {
+        Object.assign(localBucket, remoteBucket);
+      }
+    };
+    if (remote.customerColorsByContext) {
+      mergeColors(customerColorsByContext.work, remote.customerColorsByContext.work);
+      mergeColors(customerColorsByContext.personal, remote.customerColorsByContext.personal);
+    } else if (remote.customerColors) {
+      mergeColors(customerColorsByContext.work, remote.customerColors);
+    }
+    if (remote.customerAliasesByContext) {
+      mergeColors(customerAliasesByContext.work, remote.customerAliasesByContext.work);
+      mergeColors(customerAliasesByContext.personal, remote.customerAliasesByContext.personal);
+    } else if (remote.customerAliases) {
+      mergeColors(customerAliasesByContext.work, remote.customerAliases);
+    }
     migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts();
     syncContextView();
     saveLocal();
@@ -2992,6 +3042,10 @@ async function pushToGist(immediate = false) {
   return new Promise(resolve => {
     const doPush = async () => {
       gistPushTimer = null;
+      // Re-check tokens at firing time. The user may have disconnected during
+      // the 1.5s debounce window, in which case we should NOT push to a stale
+      // / empty endpoint and surface a misleading "Push failed (404)" toast.
+      if (!gistToken || !gistId) { resolve(false); return; }
       try {
         gistSyncing = true; updateGistUI();
         // Fold live-view back into bucket before serializing
