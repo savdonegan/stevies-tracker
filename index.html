@@ -2836,7 +2836,8 @@ async function setupGist(token, gid, pin) {
   return true;
 }
 
-async function unlockGist(pin) {
+async function unlockGist(pin, opts) {
+  opts = opts || {};
   const cfg = getGistConfig();
   if (!cfg) return false;
   try {
@@ -2847,7 +2848,9 @@ async function unlockGist(pin) {
     await pullFromGist();
     return true;
   } catch (err) {
-    showToast("Wrong PIN");
+    // Silent failures during auto-attempts (typing in progress) — only show
+    // the "Wrong PIN" toast for explicit button clicks.
+    if (!opts.silent) showToast("Wrong PIN");
     return false;
   }
 }
@@ -3122,6 +3125,18 @@ document.addEventListener("visibilitychange", () => {
     pullFromGist();
   }
 });
+
+// Periodic auto-pull while the tab is visible. Fires every 10 seconds so
+// changes from another device show up within ~10s. pullFromGist early-exits
+// if the gist's updated_at hasn't changed since the last pull, so when
+// nothing's happening this is a tiny no-op GET. GitHub authed rate limit
+// is 5000/hour — at 10s polling, that's 360/hour per device. Still 14×
+// under the limit.
+setInterval(() => {
+  if (document.visibilityState === "visible" && gistToken) {
+    pullFromGist();
+  }
+}, 10000);
 // Sync uses Firestore's serverTimestamp() so all writes are stamped by Google's
 // server clock. This eliminates client-clock skew between devices: a device
 // whose clock is fast can no longer falsely "win" last-write-wins comparisons.
@@ -4515,6 +4530,19 @@ document.getElementById("autoUnlockGoBtn").addEventListener("click", async () =>
 });
 document.getElementById("autoUnlockPin").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("autoUnlockGoBtn").click();
+});
+// Auto-attempt unlock as the user types — no need to press Enter. Debounced
+// 250ms so we don't fire mid-keystroke. Silent failures on wrong PIN; once
+// the correct PIN is fully typed, the overlay dismisses automatically.
+let _pinAutoTryTimer = null;
+document.getElementById("autoUnlockPin").addEventListener("input", e => {
+  if (_pinAutoTryTimer) clearTimeout(_pinAutoTryTimer);
+  const pin = e.target.value;
+  if (pin.length < 4) return;
+  _pinAutoTryTimer = setTimeout(async () => {
+    const ok = await unlockGist(pin, { silent: true });
+    if (ok) e.target.value = "";
+  }, 250);
 });
 document.getElementById("autoUnlockSkipBtn").addEventListener("click", () => {
   hideUnlockOverlay();
