@@ -1550,29 +1550,28 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     .task-table > .grid-row,
     .task-table #taskList .grid-row { min-width: 0 !important; }
 
+    /* COLLAPSED CARD — Apple Reminders style. Title prominent on top,
+       meta items (status pill, due date, customer chip) wrap inline below
+       in small text. Tight padding so the list scans like a real list,
+       not a grid of fat cards. */
     .task-row {
-      display: block !important;
+      display: flex !important;
+      flex-flow: row wrap;
       grid-template-columns: none !important;
+      gap: 4px 8px;
       background: white;
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px !important;
-      margin-bottom: 6px;
+      border-radius: 8px;
+      padding: 9px 12px !important;
+      margin-bottom: 5px;
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
       position: relative;
     }
     .task-row.subtask-row {
-      margin-left: 16px;
-      padding-left: 12px !important;
+      margin-left: 14px;
       border-left: 3px solid var(--blue-2);
     }
-    /* Inside each card, lay cells out as block items */
-    .task-row [data-col] {
-      display: block;
-      padding: 3px 0;
-      width: 100%;
-    }
-    /* Collapsed state: hide most fields, show only the essentials */
+    /* Hide noisy columns in collapsed state */
     .task-row:not(.mobile-expanded) [data-col="importance"],
     .task-row:not(.mobile-expanded) [data-col="repeat"],
     .task-row:not(.mobile-expanded) [data-col="next"],
@@ -1582,30 +1581,65 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     .task-row:not(.mobile-expanded) [data-col="delete"] {
       display: none;
     }
-    /* Compact header row inside the card: status + due side-by-side */
-    .task-row [data-col="status"],
-    .task-row [data-col="due"] {
-      display: inline-block;
-      width: auto;
-      vertical-align: middle;
+    /* Collapsed: title on its own row (full width), meta wraps below */
+    .task-row:not(.mobile-expanded) [data-col="task"] {
+      order: 1;
+      flex: 1 1 100%;
+      padding: 0;
+      min-width: 0;
     }
-    .task-row [data-col="status"] { margin-right: 8px; }
-    .task-row [data-col="status"] .status-select { width: auto; min-width: 90px; }
-    .task-row [data-col="due"] .due-input { width: auto; max-width: 130px; }
-
-    /* Task title styled prominently */
-    .task-row [data-col="task"] { padding-top: 6px; }
-    .task-row [data-col="task"] .task-text {
-      font-size: 14px;
+    .task-row:not(.mobile-expanded) [data-col="task"] .task-text {
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.3;
+    }
+    .task-row:not(.mobile-expanded) [data-col="status"] {
+      order: 2; flex: 0 0 auto;
+    }
+    .task-row:not(.mobile-expanded) [data-col="due"] {
+      order: 3; flex: 0 0 auto;
+    }
+    .task-row:not(.mobile-expanded) [data-col="customer"] {
+      order: 4; flex: 0 0 auto;
+    }
+    /* Compact controls in the meta line */
+    .task-row:not(.mobile-expanded) .status-select {
+      width: auto !important;
+      min-width: 80px;
+      padding: 2px 8px;
+      font-size: 10.5px;
+    }
+    .task-row:not(.mobile-expanded) .due-input {
+      width: auto !important;
+      padding: 2px 4px;
+      font-size: 11px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+    }
+    .task-row:not(.mobile-expanded) .customer-chip {
+      padding: 2px 9px;
+      font-size: 10.5px;
       font-weight: 500;
     }
-    .task-row .add-subtask-hover { display: none; } /* + button hidden on mobile */
+    .task-row:not(.mobile-expanded) .customer-select {
+      font-size: 10.5px;
+    }
+    .task-row .add-subtask-hover { display: none; }
 
-    /* Customer chip inline below title */
-    .task-row [data-col="customer"] { padding: 2px 0 4px; }
-    .task-row [data-col="customer"] .customer-chip { display: inline-flex; }
-
-    /* When expanded: small section labels for clarity */
+    /* EXPANDED CARD — flip the row to vertical column so every field gets
+       a full-width block with a small uppercase label above. */
+    .task-row.mobile-expanded {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .task-row.mobile-expanded [data-col] {
+      flex: 1 1 100%;
+      width: 100%;
+      padding: 0;
+    }
     .task-row.mobile-expanded [data-col]::before {
       content: attr(data-col);
       display: block;
@@ -1614,27 +1648,23 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: var(--text-muted);
-      margin-bottom: 2px;
+      margin-bottom: 3px;
     }
-    .task-row.mobile-expanded [data-col="status"]::before,
-    .task-row.mobile-expanded [data-col="task"]::before,
-    .task-row.mobile-expanded [data-col="due"]::before,
-    .task-row.mobile-expanded [data-col="customer"]::before { content: none; } /* keep top row clean */
-    /* Force the expanded fields back to full-width block */
-    .task-row.mobile-expanded [data-col="importance"],
-    .task-row.mobile-expanded [data-col="repeat"],
-    .task-row.mobile-expanded [data-col="owner"],
-    .task-row.mobile-expanded [data-col="next"],
-    .task-row.mobile-expanded [data-col="notes"],
-    .task-row.mobile-expanded [data-col="email"],
-    .task-row.mobile-expanded [data-col="doc"] {
-      display: block;
-      padding: 6px 0 2px;
+    .task-row.mobile-expanded [data-col="task"]::before { content: none; } /* title doesn't need a label */
+    .task-row.mobile-expanded [data-col="task"] .task-text {
+      font-size: 16px;
+      font-weight: 500;
+    }
+    .task-row.mobile-expanded .status-select,
+    .task-row.mobile-expanded .due-input,
+    .task-row.mobile-expanded .recur-select {
+      width: 100% !important;
+      max-width: none !important;
     }
     .task-row.mobile-expanded [data-col="delete"] {
       display: flex;
-      padding-top: 8px;
       gap: 12px;
+      padding-top: 4px;
     }
 
     /* Add-task row also stacks vertically as a single column */
