@@ -179,7 +179,16 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-family: Calibri, "Carlito", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
     color: var(--text);
     background: #f4fafb;
+    /* Hard stop on horizontal scrolling — no element below should ever be
+       able to push the body wider than the viewport. This is the actual
+       fix for the persistent right-side white space the user kept seeing:
+       something inside (the Epic logo in the header was the prime suspect)
+       was overflowing horizontally, which made the visible viewport
+       narrower than the actual document width. */
+    overflow-x: hidden;
+    width: 100%;
   }
+  *, *::before, *::after { max-width: 100%; }
 
   @font-face {
     font-family: 'Hanky Demo';
@@ -1535,6 +1544,15 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       flex-direction: column;
     }
     .personal-sidebar .side-list-section { width: 100%; }
+    /* The Epic logo is wide and proportional to its height — at narrow widths
+       it pushes the header (and indirectly the page layout) past the viewport
+       edge, creating phantom right-side whitespace. Constrain it. */
+    .epic-logo { max-height: 36px; max-width: 80px; height: 36px; }
+  }
+  @media (max-width: 600px) {
+    /* On phones, the header has barely enough room for title + pills + buttons.
+       Hide the logo entirely to free up horizontal space. */
+    .epic-logo, .epic-logo-fallback { display: none !important; }
   }
 
   /* Cards layout for any viewport that can't comfortably show all the columns
