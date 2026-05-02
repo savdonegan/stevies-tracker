@@ -457,6 +457,74 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .settings-btn:hover { background: rgba(255,255,255,0.3); }
   #headerSyncBtn.spinning { animation: header-spin 0.8s linear infinite; }
   @keyframes header-spin { to { transform: rotate(360deg); } }
+
+  /* Auto-unlock overlay — full-screen modal that pops on page load when
+     encrypted gist config is present. Banking-app vibe: tap PIN, unlock, go. */
+  .auto-unlock-overlay {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(135deg, var(--blue-1) 0%, var(--blue-2) 100%);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .auto-unlock-card {
+    background: white;
+    border-radius: 16px;
+    padding: 28px 24px;
+    max-width: 320px;
+    width: 100%;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.25);
+    text-align: center;
+  }
+  .auto-unlock-emoji { font-size: 36px; margin-bottom: 8px; }
+  .auto-unlock-title {
+    font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 4px;
+  }
+  .auto-unlock-sub {
+    font-size: 13px; color: var(--text-muted); margin-bottom: 18px;
+  }
+  .auto-unlock-card input {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 18px;
+    text-align: center;
+    letter-spacing: 6px;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 10px;
+    font-family: monospace;
+    margin-bottom: 12px;
+  }
+  .auto-unlock-card input:focus {
+    outline: none;
+    border-color: var(--blue-1);
+    box-shadow: 0 0 0 3px rgba(42, 121, 134, 0.15);
+  }
+  .auto-unlock-card button {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    background: var(--blue-1);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .auto-unlock-card button:hover { background: #1f5a6b; }
+  .auto-unlock-card .auto-unlock-skip {
+    background: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    margin-top: 8px;
+    padding: 8px;
+    text-decoration: underline;
+  }
+  .auto-unlock-card .auto-unlock-skip:hover { background: none; color: var(--text); }
   .epic-logo {
     height: 68px;
     width: auto;
@@ -1765,6 +1833,20 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 </head>
 <body>
 
+<!-- Auto-unlock overlay: shown on page load when an encrypted Gist config
+     exists. PIN entry → unlocks token → starts syncing. -->
+<div id="autoUnlockOverlay" class="auto-unlock-overlay" style="display: none;">
+  <div class="auto-unlock-card">
+    <div class="auto-unlock-emoji">🔒</div>
+    <div class="auto-unlock-title">Welcome back</div>
+    <div class="auto-unlock-sub">Enter your PIN to sync</div>
+    <input type="password" id="autoUnlockPin" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus>
+    <button id="autoUnlockGoBtn">Unlock</button>
+    <button id="autoUnlockSkipBtn" class="auto-unlock-skip">Skip — work offline</button>
+  </div>
+</div>
+
+
 <header class="app-header">
   <span class="app-title">Stevie's Epic Task Tracker</span>
   <div class="header-actions">
@@ -2727,7 +2809,6 @@ async function setupGist(token, gid, pin) {
     showToast("Need token, gist ID, and a PIN of at least 4 characters");
     return false;
   }
-  // Quick sanity check — try a GET on the gist with this token
   try {
     const r = await fetch(`https://api.github.com/gists/${gid}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
@@ -2745,8 +2826,8 @@ async function setupGist(token, gid, pin) {
   gistToken = token;
   gistId = gid;
   showToast("✓ GitHub Gist sync configured");
+  hideUnlockOverlay();
   updateGistUI();
-  // Initial pull to seed local state from the gist (or push if gist is empty)
   await pullFromGist();
   return true;
 }
@@ -2757,7 +2838,7 @@ async function unlockGist(pin) {
   try {
     gistToken = await window._crypto.decrypt(pin, cfg.encryptedToken);
     gistId = cfg.gistId;
-    showToast("✓ Sync unlocked");
+    hideUnlockOverlay();
     updateGistUI();
     await pullFromGist();
     return true;
@@ -2775,6 +2856,23 @@ function clearGistConfig() {
   gistId = "";
   showToast("Disconnected");
   updateGistUI();
+}
+
+// Auto-prompt overlay: shown at page load when encrypted config exists.
+// Lets the user unlock without digging into Settings.
+function showUnlockOverlay() {
+  const ov = document.getElementById("autoUnlockOverlay");
+  if (ov) {
+    ov.style.display = "flex";
+    setTimeout(() => {
+      const inp = document.getElementById("autoUnlockPin");
+      if (inp) inp.focus();
+    }, 50);
+  }
+}
+function hideUnlockOverlay() {
+  const ov = document.getElementById("autoUnlockOverlay");
+  if (ov) ov.style.display = "none";
 }
 
 async function pullFromGist() {
@@ -2904,8 +3002,10 @@ async function initGistSync() {
     updateGistUI();
     return;
   }
-  // We have an encrypted token — show the unlock UI. User taps PIN → unlockGist runs.
+  // Encrypted config present — auto-pop the unlock overlay so the user can
+  // PIN-in without navigating to Settings.
   updateGistUI();
+  showUnlockOverlay();
 }
 
 function updateGistUI() {
@@ -2915,28 +3015,20 @@ function updateGistUI() {
   const setupBtn = document.getElementById("gistSetupBtn");
   const pullBtn = document.getElementById("gistPullBtn");
   const resetBtn = document.getElementById("gistResetBtn");
-  const cfg = getGistConfig();
-  const unlocked = !!gistToken;
+  const connected = !!gistToken;
 
   if (!status) return; // UI not in DOM yet
+  // The unlock block is no longer used (no PIN flow). Hide unconditionally.
+  if (unlockBlock) unlockBlock.style.display = "none";
 
-  if (unlocked) {
+  if (connected) {
     status.innerHTML = `✓ Connected to gist <code style="font-size:11px;">${escapeHtml(gistId.slice(0,12))}…</code>${gistSyncing ? " · syncing…" : ""}`;
     if (setupBlock) setupBlock.style.display = "none";
-    if (unlockBlock) unlockBlock.style.display = "none";
     if (setupBtn) setupBtn.style.display = "none";
     if (pullBtn) pullBtn.style.display = "inline-block";
     if (resetBtn) resetBtn.style.display = "inline-block";
-  } else if (cfg) {
-    status.textContent = "🔒 Sync configured but locked — enter PIN to start syncing";
-    if (setupBlock) setupBlock.style.display = "none";
-    if (unlockBlock) unlockBlock.style.display = "block";
-    if (setupBtn) setupBtn.style.display = "none";
-    if (pullBtn) pullBtn.style.display = "none";
-    if (resetBtn) resetBtn.style.display = "inline-block";
   } else {
     status.textContent = "Not connected. Tasks save locally only.";
-    if (unlockBlock) unlockBlock.style.display = "none";
     if (setupBtn) setupBtn.style.display = "inline-block";
     if (pullBtn) pullBtn.style.display = "none";
     if (resetBtn) resetBtn.style.display = "none";
@@ -4347,6 +4439,21 @@ document.getElementById("headerSyncBtn").addEventListener("click", () => {
   pullFromGist();
 });
 document.getElementById("gistResetBtn").addEventListener("click", clearGistConfig);
+// Auto-unlock overlay handlers
+document.getElementById("autoUnlockGoBtn").addEventListener("click", async () => {
+  const pin = document.getElementById("autoUnlockPin").value;
+  const ok = await unlockGist(pin);
+  if (ok) {
+    document.getElementById("autoUnlockPin").value = "";
+  }
+});
+document.getElementById("autoUnlockPin").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("autoUnlockGoBtn").click();
+});
+document.getElementById("autoUnlockSkipBtn").addEventListener("click", () => {
+  hideUnlockOverlay();
+  showToast("Working offline. Tap ⚙ → Sync to unlock later.");
+});
 
 // Export current data as a downloadable JSON file (for cross-device sync)
 document.getElementById("exportJsonBtn").addEventListener("click", () => {
