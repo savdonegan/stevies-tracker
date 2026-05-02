@@ -227,6 +227,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .saved-pill.warn { background: rgba(213, 75, 75, 0.25); border-color: rgba(255,200,200,0.4); cursor: pointer; }
   .saved-pill.warn .pill-dot { background: #ff8a8a; }
   .saved-pill.idle .pill-dot { background: #c9c2da; }
+  .saved-pill.saved-syncing .pill-dot { background: #f4d27a; animation: header-spin 1s linear infinite; }
+  .saved-pill.saved-error { background: rgba(213, 75, 75, 0.30); border-color: rgba(255,200,200,0.5); cursor: help; }
+  .saved-pill.saved-error .pill-dot { background: #ff6b6b; }
+  .saved-pill.saved-ok .pill-dot { background: #6acf85; }
 
   .done-pill {
     display: inline-flex;
@@ -2876,15 +2880,22 @@ function hideUnlockOverlay() {
 }
 
 async function pullFromGist() {
-  if (!gistToken || !gistId) return;
+  if (!gistToken || !gistId) {
+    console.log("[gist] pull skipped — not connected");
+    return;
+  }
   try {
     gistSyncing = true; updateGistUI();
+    console.log("[gist] pulling from", gistId);
     const r = await fetch(`https://api.github.com/gists/${gistId}`, {
       headers: { Authorization: `Bearer ${gistToken}`, Accept: "application/vnd.github+json" }
     });
     if (!r.ok) {
-      console.warn("Gist pull failed:", r.status);
-      showToast(`Pull failed (${r.status})`);
+      const body = await r.text().catch(() => "");
+      console.warn("[gist] pull failed:", r.status, body);
+      gistLastSyncOk = false;
+      gistLastError = `${r.status} ${r.statusText}`;
+      showToast(`Pull failed (${r.status}): ${r.statusText}`);
       return;
     }
     const gist = await r.json();
@@ -2925,6 +2936,10 @@ async function pullFromGist() {
     syncContextView();
     saveLocal();
     setLastPulledAt(remoteUpdatedAt);
+    gistLastSyncOk = true;
+    gistLastSyncTime = Date.now();
+    gistLastError = "";
+    console.log(`[gist] pull ok — ${tasks.length} tasks, dataChanged=${dataChanged}`);
     if (dataChanged) {
       populateCustomerDropdowns();
       render();
@@ -2932,7 +2947,10 @@ async function pullFromGist() {
       showToast("↓ Synced from gist");
     }
   } catch (err) {
-    console.warn("Gist pull error:", err);
+    console.warn("[gist] pull error:", err);
+    gistLastSyncOk = false;
+    gistLastError = err.message || String(err);
+    showToast(`Pull error: ${gistLastError}`);
   } finally {
     gistSyncing = false; updateGistUI();
   }
@@ -2974,15 +2992,25 @@ async function pushToGist(immediate = false) {
           body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(body, null, 2) } } })
         });
         if (!r.ok) {
-          console.warn("Gist push failed:", r.status);
-          showToast(`Push failed (${r.status})`);
+          const body = await r.text().catch(() => "");
+          console.warn("[gist] push failed:", r.status, body);
+          gistLastSyncOk = false;
+          gistLastError = `${r.status} ${r.statusText}`;
+          showToast(`Push failed (${r.status}): ${r.statusText}`);
           resolve(false); return;
         }
         const updated = await r.json();
         setLastPulledAt(new Date(updated.updated_at).getTime());
+        gistLastSyncOk = true;
+        gistLastSyncTime = Date.now();
+        gistLastError = "";
+        console.log("[gist] push ok @", updated.updated_at);
         resolve(true);
       } catch (err) {
-        console.warn("Gist push error:", err);
+        console.warn("[gist] push error:", err);
+        gistLastSyncOk = false;
+        gistLastError = err.message || String(err);
+        showToast(`Push error: ${gistLastError}`);
         resolve(false);
       } finally {
         gistSyncing = false; updateGistUI();
@@ -3008,6 +3036,11 @@ async function initGistSync() {
   showUnlockOverlay();
 }
 
+// Track last sync result so the saved-pill can be honest about state
+let gistLastSyncOk = null; // null = never tried, true = success, false = error
+let gistLastSyncTime = 0;
+let gistLastError = "";
+
 function updateGistUI() {
   const status = document.getElementById("gistSyncStatus");
   const setupBlock = document.getElementById("gistSetupBlock");
@@ -3015,10 +3048,11 @@ function updateGistUI() {
   const setupBtn = document.getElementById("gistSetupBtn");
   const pullBtn = document.getElementById("gistPullBtn");
   const resetBtn = document.getElementById("gistResetBtn");
+  const cfg = getGistConfig();
   const connected = !!gistToken;
+  const hasConfig = !!cfg;
 
   if (!status) return; // UI not in DOM yet
-  // The unlock block is no longer used (no PIN flow). Hide unconditionally.
   if (unlockBlock) unlockBlock.style.display = "none";
 
   if (connected) {
@@ -3033,16 +3067,48 @@ function updateGistUI() {
     if (pullBtn) pullBtn.style.display = "none";
     if (resetBtn) resetBtn.style.display = "none";
   }
-  // Saved-pill cosmetic update
+
+  // Saved-pill: honest about state.
+  //   • No config       → "Saved locally"
+  //   • Config + locked → "Locked"
+  //   • Syncing         → "Syncing…"
+  //   • Last sync error → "Sync failed" (red)
+  //   • Last sync ok    → "Synced"
   const pill = document.getElementById("savedPill");
   const label = document.getElementById("savedLabel");
-  if (label && unlocked) {
-    label.textContent = gistSyncing ? "Syncing…" : "Synced";
+  const dot = pill ? pill.querySelector(".pill-dot") : null;
+  if (label && pill) {
+    pill.classList.remove("idle", "saved-error", "saved-syncing", "saved-ok");
+    if (gistSyncing) {
+      label.textContent = "Syncing…";
+      pill.classList.add("saved-syncing");
+      pill.title = "Syncing with GitHub Gist…";
+    } else if (!hasConfig) {
+      label.textContent = "Saved locally";
+      pill.classList.add("idle");
+      pill.title = "No cloud sync configured. Tasks save to this device's browser only.";
+    } else if (!connected) {
+      label.textContent = "Locked";
+      pill.classList.add("idle");
+      pill.title = "Sync configured but locked. Enter PIN to unlock.";
+    } else if (gistLastSyncOk === false) {
+      label.textContent = "Sync failed";
+      pill.classList.add("saved-error");
+      pill.title = "Last sync failed: " + (gistLastError || "unknown error") + ". Tap ↻ to retry.";
+    } else if (gistLastSyncOk === true) {
+      label.textContent = "Synced";
+      pill.classList.add("saved-ok");
+      pill.title = "Synced with GitHub Gist " + new Date(gistLastSyncTime).toLocaleTimeString();
+    } else {
+      label.textContent = "Saved locally";
+      pill.classList.add("idle");
+      pill.title = "Connected to gist but not yet synced. Tap ↻ to sync.";
+    }
   }
-  // Header sync button — visible whenever sync is unlocked. Spins while syncing.
+  // Header sync button — visible whenever connected. Spins while syncing.
   const headerBtn = document.getElementById("headerSyncBtn");
   if (headerBtn) {
-    headerBtn.style.display = unlocked ? "" : "none";
+    headerBtn.style.display = connected ? "" : "none";
     headerBtn.classList.toggle("spinning", gistSyncing);
   }
 }
