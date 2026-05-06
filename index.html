@@ -106,6 +106,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     --col-task: 1.7fr;
     --col-customer: 110px;
     --col-next: 1.0fr;
+    --col-lastbadgered: 100px;
     --col-notes: 1.0fr;
     --col-email: 48px;
     --col-doc: 48px;
@@ -902,6 +903,22 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-size: 12px;
     font-weight: 500;
   }
+  /* Editable customer/tag name pill — looks like the chip but is contenteditable.
+     Visual cue on hover/focus so the user knows they can type. */
+  .colors-panel-row .customer-name-edit {
+    cursor: text;
+    outline: none;
+    border: 1px dashed transparent;
+    transition: border-color 0.12s, box-shadow 0.12s;
+    min-width: 60px;
+  }
+  .colors-panel-row .customer-name-edit:hover {
+    border-color: rgba(0, 0, 0, 0.25);
+  }
+  .colors-panel-row .customer-name-edit:focus {
+    border-color: var(--blue-1);
+    box-shadow: 0 0 0 2px var(--blue-3);
+  }
   .colors-panel-row input[type=color] {
     width: 30px;
     height: 28px;
@@ -933,9 +950,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .grid-row {
     display: grid;
     grid-template-columns:
-      var(--col-status) var(--col-importance) var(--col-due) var(--col-repeat)
+      var(--col-status) var(--col-importance) var(--col-due)
       var(--col-task) var(--col-customer) var(--col-next)
-      var(--col-notes) var(--col-email) var(--col-doc) var(--col-delete);
+      var(--col-lastbadgered) var(--col-notes)
+      var(--col-email) var(--col-doc) var(--col-delete);
     gap: 8px;
     padding: var(--row-padding-y) 16px;
     align-items: center;
@@ -943,16 +961,26 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-size: var(--row-font-size);
   }
 
+  /* Repeat is no longer a list column — recurrence is set when a task is
+     created and that spawns separate task instances for each occurrence
+     (Outlook/Reminders style), so there's nothing to display per-row. We
+     hide the Repeat header, the per-row select, and the filter dropdown
+     ONLY inside the task list. The Repeat chooser in the "+ New Task"
+     form (inside .new-task-box) stays visible — that's where recurrence
+     is set when creating a new task. */
+  .task-table [data-col="repeat"] { display: none !important; }
+
   /* Personal context: a leaner column set. We hide next / email / doc
      entirely and use a tighter grid template. The task and notes columns
      absorb the freed space. The customer header label is renamed to "Tags"
      in JS, since the column itself stays — same chip + select, just retitled. */
   body.context-personal .grid-row {
     grid-template-columns:
-      var(--col-status) var(--col-importance) var(--col-due) var(--col-repeat)
+      var(--col-status) var(--col-importance) var(--col-due)
       var(--col-task) var(--col-customer) var(--col-notes) var(--col-delete);
   }
   body.context-personal [data-col="next"],
+  body.context-personal [data-col="lastbadgered"],
   body.context-personal [data-col="email"],
   body.context-personal [data-col="doc"] {
     display: none !important;
@@ -2068,6 +2096,522 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     /* For native popup pickers (selects, dates), 16px is fine and matches iOS feel */
     select, input[type="date"] { font-size: 16px; }
   }
+
+  /* ---------------- Recurrence picker (Outlook-style) ---------------- */
+
+  /* Compound widget: a date input plus a small ↻ button to set/edit
+     recurrence. Used both in the new-task form and in each existing task
+     row's Due cell. The button is highlighted when a rule is set. */
+  .due-cell-with-recur {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+  }
+  .due-cell-with-recur input[type="date"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .recur-mini-btn {
+    flex-shrink: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.12s;
+    height: 22px;
+    min-width: 22px;
+  }
+  .recur-mini-btn:hover { border-color: var(--blue-2); color: var(--blue-1); }
+  .recur-mini-btn.has-rule {
+    background: var(--blue-1);
+    color: white;
+    border-color: var(--blue-1);
+    font-weight: 600;
+  }
+
+  /* The "Repeat: [button]" row inside the New Task box. Sits below the
+     grid-row so it doesn't fight the grid for column space. */
+  .recur-form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0 0;
+    margin-top: 8px;
+    border-top: 1px dashed var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .recur-form-label {
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .recur-trigger-btn {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .recur-trigger-btn:hover { border-color: var(--blue-2); background: var(--bg-soft); }
+  .recur-trigger-btn.active {
+    background: var(--blue-3);
+    border-color: var(--blue-1);
+    color: var(--blue-1);
+    font-weight: 600;
+  }
+
+  /* Modal scrim + card */
+  .recur-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 50, 60, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  .recur-modal-card {
+    background: white;
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    width: 100%;
+    max-width: 480px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    padding: 0;
+    font-family: inherit;
+  }
+  .recur-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .recur-modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: var(--blue-1);
+    font-weight: 700;
+  }
+  .recur-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 8px;
+  }
+  .recur-close:hover { color: var(--text); }
+
+  .recur-section {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .recur-section:last-of-type { border-bottom: none; }
+  .recur-section-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .recur-interval-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+  }
+  .recur-interval-row .recur-section-label {
+    margin-bottom: 0;
+  }
+  .recur-unit-label {
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* Pattern tabs — 4 buttons in a row, the active one is highlighted. */
+  .recur-pattern-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .recur-pattern-tab {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .recur-pattern-tab:hover { border-color: var(--blue-2); background: var(--bg-soft); }
+  .recur-pattern-tab.active {
+    background: var(--blue-1);
+    color: white;
+    border-color: var(--blue-1);
+  }
+
+  /* Frequency-specific sections — hidden by default, shown by the active
+     frequency via [data-active-freq] on the modal card. */
+  .recur-freq-section { display: none; }
+  .recur-modal-card[data-active-freq="daily"]   .recur-freq-section[data-freq="daily"]   { display: block; }
+  .recur-modal-card[data-active-freq="weekly"]  .recur-freq-section[data-freq="weekly"]  { display: block; }
+  .recur-modal-card[data-active-freq="monthly"] .recur-freq-section[data-freq="monthly"] { display: block; }
+  .recur-modal-card[data-active-freq="yearly"]  .recur-freq-section[data-freq="yearly"]  { display: block; }
+  /* Hide interval row when freq is "none" */
+  .recur-modal-card[data-active-freq="none"] #recurIntervalRow { display: none; }
+
+  .recur-input {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    background: white;
+    color: var(--text);
+  }
+  .recur-input-num { width: 56px; padding: 6px 8px; }
+  .recur-input:focus { outline: none; border-color: var(--blue-2); }
+
+  .recur-checkbox-row,
+  .recur-radio-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+    color: var(--text);
+    flex-wrap: wrap;
+  }
+  .recur-checkbox-row input,
+  .recur-radio-row input[type="radio"] {
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+
+  .weekday-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .weekday-pill {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    min-width: 44px;
+    text-align: center;
+    transition: all 0.12s;
+  }
+  .weekday-pill:hover { border-color: var(--blue-2); }
+  .weekday-pill.active {
+    background: var(--blue-1);
+    color: white;
+    border-color: var(--blue-1);
+    font-weight: 600;
+  }
+
+  .recur-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0;
+  }
+  .recur-summary {
+    background: var(--bg-soft);
+    padding: 12px 20px;
+    font-size: 13px;
+    color: var(--blue-1);
+    font-weight: 600;
+    text-align: center;
+  }
+  .recur-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .recur-btn-secondary,
+  .recur-btn-primary {
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .recur-btn-secondary {
+    background: white;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .recur-btn-secondary:hover { background: var(--bg-soft); }
+  .recur-btn-primary {
+    background: var(--blue-1);
+    border: 1px solid var(--blue-1);
+    color: white;
+  }
+  .recur-btn-primary:hover { background: #1f5a6b; }
+  /* "Don't repeat" sits on the far left so it feels like a destructive/clear
+     action, separate from the OK/Cancel cluster on the right. */
+  .recur-btn-clear { margin-right: auto; }
+
+  /* Defer modal: a slimmer version of the recurrence picker, tuned for
+     "how many days until I follow up?" */
+  .defer-modal-card { max-width: 380px; }
+  .defer-presets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .defer-preset {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .defer-preset:hover { border-color: var(--blue-2); background: var(--bg-soft); }
+  .defer-preset:active { transform: scale(0.97); }
+
+  /* ---------------- "Working on now" focus card ---------------- */
+
+  /* Bright, prominent card pinned above the task list. Visually distinct
+     from everything else so an ADHD-prone user can't miss it. The yellow/
+     orange gradient is intentional: it's a "stop and look at me" color
+     that contrasts with the powder-blue palette used everywhere else. */
+  .now-card {
+    background: linear-gradient(135deg, #fff7d9 0%, #ffeac1 100%);
+    border: 2px solid #f4a83a;
+    border-radius: 14px;
+    box-shadow: 0 4px 14px rgba(244, 168, 58, 0.25);
+    margin-bottom: 14px;
+    padding: 14px 18px;
+    position: relative;
+    animation: now-card-pulse 2s ease-in-out infinite;
+  }
+  @keyframes now-card-pulse {
+    0%, 100% { box-shadow: 0 4px 14px rgba(244, 168, 58, 0.25); }
+    50%      { box-shadow: 0 4px 22px rgba(244, 168, 58, 0.45); }
+  }
+  .now-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .now-card-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #a25d00;
+  }
+  .now-card-actions { display: flex; gap: 6px; }
+  .now-card-btn {
+    background: white;
+    border: 1px solid #f4a83a;
+    color: #a25d00;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .now-card-btn:hover { background: #fdf2dc; }
+  .now-card-done-btn { background: #f4a83a; color: white; border-color: #f4a83a; }
+  .now-card-done-btn:hover { background: #d68a1a; border-color: #d68a1a; }
+  /* "Waiting for response" — uses the same blue palette as the status pill
+     so it reads as the same action visually. */
+  .now-card-waiting-btn { background: var(--blue-2); color: white; border-color: var(--blue-2); }
+  .now-card-waiting-btn:hover { background: var(--blue-1); border-color: var(--blue-1); }
+  .now-card-clear-btn { width: 28px; padding: 4px; font-size: 16px; line-height: 1; }
+  .now-card-clear-all { font-size: 11px; padding: 3px 10px; }
+  .now-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  /* Each pinned task is its own mini-card inside the body. The whole card
+     is draggable so the user can reorder by priority — the action buttons
+     in the top-right have their own click handlers and don't initiate
+     dragging. */
+  .now-item {
+    position: relative;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(244, 168, 58, 0.3);
+    border-radius: 10px;
+    padding: 10px 14px;
+    padding-right: 110px;  /* leave room for the floating action buttons */
+    cursor: grab;
+    user-select: none;
+    transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+  }
+  .now-item:active { cursor: grabbing; }
+  .now-item.dragging {
+    opacity: 0.45;
+    transform: scale(0.98);
+  }
+  .now-item.drag-over {
+    border-color: var(--blue-1);
+    box-shadow: 0 0 0 2px var(--blue-3) inset;
+  }
+  /* Grip indicator — a faint vertical "::" pattern on the left edge that
+     hints "you can drag this". Just decoration, not interactive. */
+  .now-item::before {
+    content: "⋮⋮";
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(162, 93, 0, 0.4);
+    font-size: 14px;
+    letter-spacing: -2px;
+    line-height: 1;
+    pointer-events: none;
+  }
+  .now-item-text, .now-meta { padding-left: 14px; }
+  .now-item-actions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 4px;
+  }
+  .now-item-actions .now-card-btn {
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+  .now-item-text {
+    font-size: 17px;
+    font-weight: 700;
+    color: #3a2300;
+    line-height: 1.35;
+    word-wrap: break-word;
+  }
+  .now-card-body .now-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #6b4d20;
+  }
+  .now-card-body .now-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  /* Customer chip inside the now card uses the same .customer-chip class
+     that's used in the task list, so it inherits the same color and shape.
+     We just need to undo the grid-cell text-align rule that shrinks it. */
+  .now-card-body .customer-chip {
+    cursor: default;
+  }
+
+  /* Next-Steps inside a pinned card. Bulleted list, slightly muted, sits
+     between the task title and the meta row. Hidden when the task has no
+     next-steps content so the card stays tight. */
+  .now-next-steps {
+    margin-top: 6px;
+    padding-left: 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #6b4d20;
+    line-height: 1.45;
+  }
+  .now-next-steps .bullet-line { display: block; }
+  .now-next-steps .bullet-line::before {
+    content: "• ";
+    color: inherit;
+    margin-right: 2px;
+  }
+
+  /* The pin button on each task row. Used to set/unset the row as "now". */
+  .focus-pin-btn,
+  .defer-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.35;
+    transition: opacity 0.12s, transform 0.12s;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .focus-pin-btn:hover,
+  .defer-btn:hover { opacity: 0.85; transform: scale(1.15); }
+  .focus-pin-btn.is-now {
+    opacity: 1;
+    color: #f4a83a;
+  }
+  /* The ⏳ defer button — when the task is already waiting for response,
+     keep it fully visible so the row's "follow-up state" is obvious. */
+  .defer-btn.is-waiting { opacity: 1; }
+
+  /* The actual task row that's currently the "now" task. Bold + warm-tinted
+     left border so you can spot it instantly when scanning the list. */
+  .task-row.is-now-task {
+    background: #fffaf0 !important;
+    border-left: 4px solid #f4a83a;
+    padding-left: calc(16px - 4px);
+  }
+  .task-row.is-now-task .task-text,
+  .task-row.is-now-task [data-col="task"] {
+    font-weight: 700;
+  }
+
+  @media (max-width: 600px) {
+    .now-card { padding: 12px 14px; margin-bottom: 10px; }
+    .now-card-body { font-size: 16px; }
+  }
+
+  @media (max-width: 600px) {
+    .recur-modal { padding: 10px; }
+    .recur-modal-card { max-height: calc(100vh - 20px); }
+    .recur-section { padding: 10px 14px; }
+    .recur-interval-row { padding: 10px 14px; }
+    .recur-actions { padding: 12px 14px; }
+  }
 </style>
 </head>
 <body>
@@ -2082,6 +2626,216 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <input type="password" id="autoUnlockPin" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus>
     <button id="autoUnlockGoBtn">Unlock</button>
     <button id="autoUnlockSkipBtn" class="auto-unlock-skip">Skip — work offline</button>
+  </div>
+</div>
+
+<!-- Deferral picker. Shown when a task is moved to "Waiting for response"
+     so Savannah can pick how many days to push the due date forward — the
+     task will then naturally sort down the list to the follow-up date. -->
+<div id="deferModal" class="recur-modal" style="display: none;">
+  <div class="recur-modal-card defer-modal-card">
+    <div class="recur-modal-header">
+      <h3>Follow up in…</h3>
+      <button type="button" class="recur-close" id="deferCloseBtn" title="Cancel">×</button>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label">When should I check on this?</label>
+      <div class="defer-presets">
+        <button type="button" class="defer-preset" data-defer-days="1">Tomorrow</button>
+        <button type="button" class="defer-preset" data-defer-days="3">3 days</button>
+        <button type="button" class="defer-preset" data-defer-days="7">1 week</button>
+        <button type="button" class="defer-preset" data-defer-days="14">2 weeks</button>
+        <button type="button" class="defer-preset" data-defer-days="30">1 month</button>
+      </div>
+    </div>
+    <div class="recur-section recur-interval-row">
+      <label class="recur-section-label">Or custom</label>
+      <input type="number" id="deferCustomDays" class="recur-input recur-input-num" min="1" max="365" value="3">
+      <span class="recur-unit-label">day(s)</span>
+      <button type="button" class="recur-btn-primary defer-custom-go" id="deferCustomGoBtn" style="margin-left:auto;">Apply</button>
+    </div>
+    <div class="recur-actions">
+      <button type="button" id="deferSkipBtn" class="recur-btn-secondary recur-btn-clear">Mark Waiting, don't change date</button>
+      <button type="button" id="deferCancelBtn" class="recur-btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Outlook-style recurrence picker. Opens when the Repeat button in the
+     "+ New Task" form is clicked. The user picks a frequency, options for
+     that frequency (which weekdays for weekly, day-of-month vs nth weekday
+     for monthly, etc.), and an end condition. Save persists the rule into
+     the `pendingRecurRule` state, which addTask consumes to spawn future
+     occurrences. -->
+<div id="recurModal" class="recur-modal" style="display: none;">
+  <div class="recur-modal-card">
+    <div class="recur-modal-header">
+      <h3>Repeat</h3>
+      <button type="button" class="recur-close" id="recurCloseBtn" title="Close">×</button>
+    </div>
+
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label">Pattern</label>
+      <div class="recur-pattern-tabs" id="recurPatternTabs">
+        <button type="button" class="recur-pattern-tab" data-freq="daily">Daily</button>
+        <button type="button" class="recur-pattern-tab" data-freq="weekly">Weekly</button>
+        <button type="button" class="recur-pattern-tab" data-freq="monthly">Monthly</button>
+        <button type="button" class="recur-pattern-tab" data-freq="yearly">Yearly</button>
+      </div>
+      <!-- Hidden mirror so the rest of the JS can keep reading freq from a select -->
+      <select id="recurFreq" style="display:none;">
+        <option value="none">Doesn't repeat</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+        <option value="yearly">Yearly</option>
+      </select>
+    </div>
+
+    <div class="recur-section recur-interval-row" id="recurIntervalRow">
+      <label class="recur-section-label">Every</label>
+      <input type="number" id="recurInterval" class="recur-input recur-input-num" min="1" max="99" value="1">
+      <span id="recurUnitLabel" class="recur-unit-label">day(s)</span>
+    </div>
+
+    <!-- Daily-specific -->
+    <div class="recur-section recur-freq-section" data-freq="daily">
+      <label class="recur-checkbox-row">
+        <input type="checkbox" id="recurWeekdaysOnly">
+        <span>Every weekday only (Mon–Fri)</span>
+      </label>
+    </div>
+
+    <!-- Weekly-specific -->
+    <div class="recur-section recur-freq-section" data-freq="weekly">
+      <label class="recur-section-label">On these days</label>
+      <div class="weekday-pills" id="recurWeekdayPills">
+        <button type="button" class="weekday-pill" data-day="0">Sun</button>
+        <button type="button" class="weekday-pill" data-day="1">Mon</button>
+        <button type="button" class="weekday-pill" data-day="2">Tue</button>
+        <button type="button" class="weekday-pill" data-day="3">Wed</button>
+        <button type="button" class="weekday-pill" data-day="4">Thu</button>
+        <button type="button" class="weekday-pill" data-day="5">Fri</button>
+        <button type="button" class="weekday-pill" data-day="6">Sat</button>
+      </div>
+    </div>
+
+    <!-- Monthly-specific -->
+    <div class="recur-section recur-freq-section" data-freq="monthly">
+      <label class="recur-radio-row">
+        <input type="radio" name="recurMonthlyMode" value="dayOfMonth" checked>
+        <span>On day</span>
+        <input type="number" id="recurDayOfMonth" class="recur-input recur-input-num" min="1" max="31" value="1">
+        <span>of the month</span>
+      </label>
+      <label class="recur-radio-row">
+        <input type="radio" name="recurMonthlyMode" value="dayOfWeek">
+        <span>On the</span>
+        <select id="recurMonthlyWeekOfMonth" class="recur-input">
+          <option value="1">first</option>
+          <option value="2">second</option>
+          <option value="3">third</option>
+          <option value="4">fourth</option>
+          <option value="-1">last</option>
+        </select>
+        <select id="recurMonthlyWeekDay" class="recur-input">
+          <option value="0">Sunday</option>
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Yearly-specific -->
+    <div class="recur-section recur-freq-section" data-freq="yearly">
+      <label class="recur-radio-row">
+        <input type="radio" name="recurYearlyMode" value="dayOfMonth" checked>
+        <span>On</span>
+        <select id="recurYearlyMonth" class="recur-input">
+          <option value="1">January</option>
+          <option value="2">February</option>
+          <option value="3">March</option>
+          <option value="4">April</option>
+          <option value="5">May</option>
+          <option value="6">June</option>
+          <option value="7">July</option>
+          <option value="8">August</option>
+          <option value="9">September</option>
+          <option value="10">October</option>
+          <option value="11">November</option>
+          <option value="12">December</option>
+        </select>
+        <input type="number" id="recurYearlyDayOfMonth" class="recur-input recur-input-num" min="1" max="31" value="1">
+      </label>
+      <label class="recur-radio-row">
+        <input type="radio" name="recurYearlyMode" value="dayOfWeek">
+        <span>The</span>
+        <select id="recurYearlyWeekOfMonth" class="recur-input">
+          <option value="1">first</option>
+          <option value="2">second</option>
+          <option value="3">third</option>
+          <option value="4">fourth</option>
+          <option value="-1">last</option>
+        </select>
+        <select id="recurYearlyWeekDay" class="recur-input">
+          <option value="0">Sunday</option>
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+        </select>
+        <span>of</span>
+        <select id="recurYearlyMonth2" class="recur-input">
+          <option value="1">January</option>
+          <option value="2">February</option>
+          <option value="3">March</option>
+          <option value="4">April</option>
+          <option value="5">May</option>
+          <option value="6">June</option>
+          <option value="7">July</option>
+          <option value="8">August</option>
+          <option value="9">September</option>
+          <option value="10">October</option>
+          <option value="11">November</option>
+          <option value="12">December</option>
+        </select>
+      </label>
+    </div>
+
+    <hr class="recur-divider">
+
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label">Range of recurrence</label>
+      <label class="recur-radio-row">
+        <input type="radio" name="recurEndMode" value="afterN" checked>
+        <span>End after</span>
+        <input type="number" id="recurEndAfter" class="recur-input recur-input-num" min="1" max="999" value="12">
+        <span>occurrences</span>
+      </label>
+      <label class="recur-radio-row">
+        <input type="radio" name="recurEndMode" value="byDate">
+        <span>End by</span>
+        <input type="date" id="recurEndBy" class="recur-input">
+      </label>
+      <label class="recur-radio-row">
+        <input type="radio" name="recurEndMode" value="never">
+        <span>No end date (capped at 200 occurrences)</span>
+      </label>
+    </div>
+
+    <div class="recur-summary" id="recurSummary">Doesn't repeat</div>
+
+    <div class="recur-actions">
+      <button type="button" id="recurClearBtn" class="recur-btn-secondary recur-btn-clear">Don't repeat</button>
+      <button type="button" id="recurCancelBtn" class="recur-btn-secondary">Cancel</button>
+      <button type="button" id="recurSaveBtn" class="recur-btn-primary">Save</button>
+    </div>
   </div>
 </div>
 
@@ -2117,6 +2871,19 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <button class="context-tab" data-context="personal">🌸 Personal</button>
   </div>
 
+  <!-- ADHD-friendly "Working on now" card. The single task you're actively
+       focused on stays bold + visible at the top of the page so you don't
+       lose track. Click the 📍 pin icon on any task row to make it your
+       current focus; only one task can be the "now" task at a time. The
+       card hides itself when no task is set. -->
+  <div class="now-card" id="nowCard" hidden>
+    <div class="now-card-header">
+      <span class="now-card-title">🎯 Working on now</span>
+      <button type="button" class="now-card-btn now-card-clear-all" id="nowClearBtn" title="Unpin everything">Clear all</button>
+    </div>
+    <div class="now-card-body" id="nowCardBody"></div>
+  </div>
+
   <div class="quick-capture" id="quickCaptureWrap">
     <input type="text" id="quickCapture" placeholder="✨ Brain dump — type a task and press Enter to capture (fill in details later)">
   </div>
@@ -2138,17 +2905,14 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         <option value="4">4</option>
         <option value="5">5</option>
       </select>
-      <input type="date" id="newDue" data-col="due">
-      <select id="newRecurrence" title="Repeat" data-col="repeat">
-        <option value="">Once</option>
-        <option value="daily">Daily</option>
-        <option value="weekdays">Weekdays</option>
-        <option value="weekly">Weekly</option>
-        <option value="monthly">Monthly</option>
-      </select>
+      <div class="due-cell-with-recur" data-col="due">
+        <input type="date" id="newDue">
+        <button type="button" class="recur-mini-btn" id="newRecurMiniBtn" title="Set repeat / recurrence">↻</button>
+      </div>
       <input type="text" id="newTask" placeholder="Task description" data-col="task">
       <select id="newCustomer" data-col="customer"><option value="">-- Select --</option></select>
       <textarea id="newNext" placeholder="Next steps (one per line)" data-col="next"></textarea>
+      <input type="date" id="newLastBadgered" data-col="lastbadgered" title="Last time you badgered someone about this">
       <textarea id="newNotes" placeholder="Notes" data-col="notes"></textarea>
       <div class="email-cell" id="newLinkCell" data-col="email">
         <button class="email-icon" id="newLinkBtn" title="Add an Outlook link or chain subject for this task">📎</button>
@@ -2316,6 +3080,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         <div data-col="next">
           <span class="hdr-label">Next Steps</span>
           <input type="text" class="hdr-filter" id="filterNext" placeholder="filter…">
+        </div>
+        <div data-col="lastbadgered">
+          <span class="hdr-label" data-sort="lastBadgered" title="Last time you nudged the responsible person">Last Badgered<span class="sort-arrow"></span></span>
+          <input type="date" class="hdr-filter" id="filterLastBadgered" title="Show tasks last badgered on or before this date">
         </div>
         <div data-col="notes">
           <span class="hdr-label">Notes</span>
@@ -2965,14 +3733,24 @@ function renderSideLists() {
     const text = li.querySelector('.side-item-text');
     const del = li.querySelector('.side-item-delete');
     cb.addEventListener('change', async () => {
-      items[idx].done = cb.checked;
+      // Re-fetch the array each time so we always mutate the live reference
+      // (not a stale closure from before a sync replaced the array).
+      const live = listKey === 'shopping' ? shoppingList : groceryList;
+      if (!live[idx]) return;
+      ensureSideItemId(live[idx]);
+      live[idx].done = cb.checked;
+      live[idx].updatedAt = Date.now();
       await persist();
       renderSideLists();
     });
     text.addEventListener('blur', async () => {
+      const live = listKey === 'shopping' ? shoppingList : groceryList;
+      if (!live[idx]) return;
       const v = text.innerText.trim();
-      if (v !== items[idx].text) {
-        items[idx].text = v;
+      if (v !== live[idx].text) {
+        ensureSideItemId(live[idx]);
+        live[idx].text = v;
+        live[idx].updatedAt = Date.now();
         await persist();
       }
     });
@@ -2980,7 +3758,9 @@ function renderSideLists() {
       if (e.key === 'Enter') { e.preventDefault(); text.blur(); }
     });
     del.addEventListener('click', async () => {
-      items.splice(idx, 1);
+      const live = listKey === 'shopping' ? shoppingList : groceryList;
+      if (!live[idx]) return;
+      live.splice(idx, 1);
       await persist();
       renderSideLists();
     });
@@ -2996,7 +3776,9 @@ function initSideListInputs() {
       if (e.key !== 'Enter') return;
       const v = inp.value.trim();
       if (!v) return;
-      listRef.list.push({ text: v, done: false });
+      const item = { text: v, done: false, updatedAt: Date.now() };
+      ensureSideItemId(item);
+      listRef.list.push(item);
       inp.value = '';
       await persist();
       renderSideLists();
@@ -3200,15 +3982,63 @@ async function pullFromGist() {
     let remote;
     try { remote = JSON.parse(content); }
     catch (e) { console.warn("Gist content not parseable:", e); return; }
-    // Adopt remote state
+    // Adopt remote state — but MERGE tasks instead of wholesale replacing.
+    // The old behavior `tasks = remote.tasks` clobbered any local edits made
+    // since the last push. Now we do last-write-wins per task using the
+    // `updatedAt` field stamped by stampTaskUpdated() on every mutation:
+    //   • Task in both → keep whichever has the higher updatedAt
+    //   • Task only in remote → adopt it (something added on another device)
+    //   • Task only in local → keep it (locally created, not yet pushed)
+    // Then we push back so the merged state propagates.
     const remoteTasksJson = JSON.stringify(remote.tasks || []);
     const localTasksJson = JSON.stringify(tasks || []);
     const dataChanged = remoteTasksJson !== localTasksJson;
-    if (Array.isArray(remote.tasks)) tasks = remote.tasks;
+    let mergedKeptLocal = 0;
+    let mergedTookRemote = 0;
+    let mergedAddedLocal = 0;
+    if (Array.isArray(remote.tasks)) {
+      const remoteById = new Map(remote.tasks.map(t => [t.id, t]));
+      const localById = new Map((tasks || []).map(t => [t.id, t]));
+      const allIds = new Set([...remoteById.keys(), ...localById.keys()]);
+      const merged = [];
+      for (const id of allIds) {
+        const r = remoteById.get(id);
+        const l = localById.get(id);
+        if (r && !l) {
+          merged.push(r);
+        } else if (l && !r) {
+          // Task only exists locally — keep it. It's either a brand-new
+          // task we haven't pushed yet, or an older task that another
+          // device deleted (we err on the side of preserving data).
+          merged.push(l);
+          mergedAddedLocal++;
+        } else {
+          // Both have it — last-write-wins by updatedAt. Tasks without
+          // updatedAt (legacy) default to 0 so anything stamped wins.
+          const lTime = Number(l.updatedAt) || 0;
+          const rTime = Number(r.updatedAt) || 0;
+          if (lTime > rTime) {
+            merged.push(l);
+            mergedKeptLocal++;
+          } else {
+            merged.push(r);
+            mergedTookRemote++;
+          }
+        }
+      }
+      tasks = merged;
+      if (mergedKeptLocal > 0 || mergedAddedLocal > 0) {
+        console.log(`[gist] merge: kept ${mergedKeptLocal} local edit${mergedKeptLocal === 1 ? "" : "s"}, ${mergedAddedLocal} unpushed local task${mergedAddedLocal === 1 ? "" : "s"}, took ${mergedTookRemote} remote update${mergedTookRemote === 1 ? "" : "s"}`);
+      }
+    }
     if (Array.isArray(remote.customNames)) customNames = remote.customNames;
     if (typeof remote.defaultOwner === "string") defaultOwner = remote.defaultOwner;
-    if (Array.isArray(remote.shoppingList)) shoppingList = remote.shoppingList;
-    if (Array.isArray(remote.groceryList)) groceryList = remote.groceryList;
+    // Side lists: merge by id (last-write-wins per item) instead of wholesale
+     // replacing. Items without an id (legacy data) are matched by text value
+     // as a fallback. This stops a pull from un-checking items the user just
+     // ticked off locally.
+    if (Array.isArray(remote.shoppingList)) shoppingList = mergeSideList(shoppingList, remote.shoppingList);
+    if (Array.isArray(remote.groceryList)) groceryList = mergeSideList(groceryList, remote.groceryList);
     // Customers list: still replace (so add/remove propagates).
     if (remote.customersByContext) {
       customersByContext = {
@@ -3249,10 +4079,15 @@ async function pullFromGist() {
     gistLastSyncTime = Date.now();
     gistLastError = "";
     console.log(`[gist] pull ok — ${tasks.length} tasks, dataChanged=${dataChanged}`);
-    if (dataChanged) {
-      populateCustomerDropdowns();
-      render();
-      renderSideLists();
+    // Always re-wire UI handlers after a pull. If we don't, the click handlers
+    // on side-list LIs (shopping/grocery checkboxes, delete buttons, etc.)
+    // keep referencing the OLD arrays after `shoppingList = ...` swap, so
+    // checking a box appears to do nothing because the change is applied to
+    // a detached array.
+    populateCustomerDropdowns();
+    render();
+    renderSideLists();
+    if (dataChanged || mergedKeptLocal > 0) {
       showToast("↓ Synced from gist");
     }
   } catch (err) {
@@ -3836,57 +4671,36 @@ function render() {
       const t = tasks.find(x => x.id === id);
       if (!t) return;
       const wasComplete = t.status === "Complete";
+      const wasWaiting = t.status === "Waiting for response";
       const newStatus = e.target.value;
+      // If the user JUST flipped the task to "Waiting for response", open the
+      // deferral picker so they can roll the due date forward to a follow-up
+      // date in one move. The modal handles persisting + re-rendering, so we
+      // skip the rest of the change handler.
+      if (!wasWaiting && newStatus === "Waiting for response") {
+        openDeferModal(id);
+        return;
+      }
       t.status = newStatus;
       if (!wasComplete && newStatus === "Complete") {
         t.completedAt = new Date().toISOString();
         celebrateComplete();
-        // If this task is recurring, spawn the next occurrence. Preserve
-        // parentId so a recurring subtask spawns under the same parent. If
-        // this is a parent task, also clone its children with new ids and a
-        // new parentId so the next occurrence has its own subtask copies.
-        if (t.recurrence) {
-          const newDue = nextRecurrence(t.due, t.recurrence);
-          const newParentId = newId();
-          tasks.push({
-            id: newParentId,
-            status: "Incomplete",
-            importance: t.importance,
-            due: newDue,
-            owner: t.owner,
-            task: t.task,
-            customer: t.customer,
-            next: t.next,
-            notes: t.notes,
-            outlookLink: "",
-            emailSubject: t.emailSubject,
-            docLink: t.docLink,
-            recurrence: t.recurrence,
-            parentId: t.parentId,        // preserve subtask-parent link if any
-            context: t.context || "work", // recurring occurrence stays in same tab
-            createdAt: Date.now(),
-            dueChanges: 0
-          });
-          // Clone children (if t is a parent task with subtasks)
-          const children = tasks.filter(c => c.parentId === t.id && !c.deletedAt);
-          for (const c of children) {
-            tasks.push({
-              ...c,
-              id: newId(),
-              parentId: newParentId,
-              status: "Incomplete",
-              completedAt: null,
-              createdAt: Date.now()
-            });
-          }
-        }
+        // Recurring tasks no longer auto-spawn the next occurrence on
+        // completion — each future occurrence was already created upfront
+        // when the task was added (Outlook/Reminders style). Just mark
+        // this one done.
       } else if (wasComplete && newStatus !== "Complete") {
         t.completedAt = null;
       }
+      stampTaskUpdated(t);
       await persist();
       render();
     });
     row.querySelector(".due-input").addEventListener("change", e => updateTask(id, "due", e.target.value));
+    const badgeredInput = row.querySelector(".last-badgered-input");
+    if (badgeredInput) {
+      badgeredInput.addEventListener("change", e => updateTask(id, "lastBadgered", e.target.value));
+    }
     row.querySelectorAll(".editable").forEach(el => {
       el.addEventListener("blur", e => updateTask(id, el.dataset.field, el.innerText));
       el.addEventListener("keydown", e => {
@@ -3961,6 +4775,33 @@ function render() {
   // subtask-text contenteditable, delete-subtask) were removed when subtasks
   // moved from a nested {text, done} shape to flat first-class task records.
   // Subtask rows now use the same .task-row event bindings as their parents.
+  // Focus pin — toggles the row as a pinned "Working on now" task. You can
+  // pin multiple tasks; clicking the pin again unpins just that one.
+  list.querySelectorAll("[data-focus-pin]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      setNowTask(btn.dataset.focusPin);
+    });
+  });
+
+  // Per-row recurrence ↻ button — opens the picker for an existing task.
+  list.querySelectorAll("[data-recur-edit]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      openRecurModal(btn.dataset.recurEdit);
+    });
+  });
+
+  // Per-row ⏳ defer button — opens the deferral picker so the user can mark
+  // the task as "Waiting for response" and roll the due date forward to a
+  // follow-up date in one shot.
+  list.querySelectorAll("[data-defer-task]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      openDeferModal(btn.dataset.deferTask);
+    });
+  });
+
   list.querySelectorAll("[data-add-subtask]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const parentId = btn.dataset.addSubtask;
@@ -4029,6 +4870,7 @@ function render() {
   });
   renderSidebar();
   renderSideLists();
+  renderNowCard();
 }
 
 // ---------------- Outlook integration ----------------
@@ -4341,7 +5183,7 @@ function renderCustomerColors() {
       const aliases = (customerAliases[name] || []).join(", ");
       return `
         <div class="colors-panel-row">
-          <span class="preview" style="background:${current}; color:${text};">${escapeHtml(name)}</span>
+          <span class="preview customer-name-edit" contenteditable="true" spellcheck="false" data-customer="${escapeHtml(name)}" title="Click to rename — Enter to save, Esc to cancel" style="background:${current}; color:${text};">${escapeHtml(name)}</span>
           <input type="text" class="alias-input" data-customer="${escapeHtml(name)}" placeholder="aliases (comma-separated, e.g., myc3, mychart cc)" value="${escapeHtml(aliases)}">
           <input type="color" data-customer="${escapeHtml(name)}" value="${current}">
           <button class="reset-btn" data-customer="${escapeHtml(name)}" ${isCustom ? "" : "disabled style='opacity:0.4'"}>Reset</button>
@@ -4373,6 +5215,61 @@ function renderCustomerColors() {
         else customerAliases[name] = parts;
         await persist();
         render();
+      });
+    });
+    // Inline rename: editing the customer/tag name pill commits on blur or
+    // Enter, cancels on Escape. Renaming cascades:
+    //   • The customers array entry is replaced
+    //   • Color override (customerColors[name]) is rekeyed to the new name
+    //   • Alias list (customerAliases[name]) is rekeyed
+    //   • Every task whose `customer` === oldName (in this context) is updated
+    list.querySelectorAll(".customer-name-edit").forEach(el => {
+      const oldName = el.dataset.customer;
+      el.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+        else if (e.key === "Escape") {
+          e.preventDefault();
+          el.innerText = oldName;
+          el.blur();
+        }
+      });
+      el.addEventListener("blur", async () => {
+        const newName = el.innerText.trim();
+        if (!newName || newName === oldName) {
+          el.innerText = oldName;  // normalize stripped whitespace etc.
+          return;
+        }
+        // Refuse renames to a name that already exists in this context
+        if (customers.includes(newName)) {
+          showToast(`"${newName}" already exists — rename cancelled`);
+          el.innerText = oldName;
+          return;
+        }
+        // Update customers array (preserves order)
+        const ix = customers.indexOf(oldName);
+        if (ix >= 0) customers[ix] = newName;
+        // Re-key color override
+        if (customerColors[oldName] !== undefined) {
+          customerColors[newName] = customerColors[oldName];
+          delete customerColors[oldName];
+        }
+        // Re-key aliases
+        if (customerAliases[oldName] !== undefined) {
+          customerAliases[newName] = customerAliases[oldName];
+          delete customerAliases[oldName];
+        }
+        // Cascade to every task in this context that referenced the old name
+        let renamedCount = 0;
+        for (const t of tasks) {
+          if (t.customer === oldName && (t.context || "work") === currentContext) {
+            t.customer = newName;
+            renamedCount++;
+          }
+        }
+        await persist();
+        render();
+        renderCustomerColors();
+        showToast(`Renamed to "${newName}"${renamedCount ? ` (${renamedCount} task${renamedCount === 1 ? "" : "s"} updated)` : ""}`);
       });
     });
   }
@@ -4417,26 +5314,8 @@ function renderSidebar() {
       if (!wasComplete && cb.checked) {
         t.completedAt = new Date().toISOString();
         celebratePandora();
-        if (t.recurrence) {
-          tasks.push({
-            id: newId(),
-            status: "Incomplete",
-            importance: t.importance,
-            due: nextRecurrence(t.due, t.recurrence),
-            owner: t.owner,
-            task: t.task,
-            customer: t.customer,
-            next: t.next,
-            notes: t.notes,
-            outlookLink: "",
-            emailSubject: t.emailSubject,
-            docLink: t.docLink,
-            subtasks: (t.subtasks || []).map(s => ({ text: s.text, done: false })),
-            recurrence: t.recurrence,
-            createdAt: Date.now(),
-            dueChanges: 0
-          });
-        }
+        // Recurring auto-respawn removed: future occurrences are now spawned
+        // upfront at task-creation time, not lazily on completion.
       } else if (wasComplete && !cb.checked) {
         t.completedAt = null;
       }
@@ -4519,7 +5398,7 @@ function taskRowHtml(t, opts2) {
     }
   }
   return `
-    <div class="grid-row task-row ${subtaskClass} ${mobileExpClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass}" data-id="${t.id}">
+    <div class="grid-row task-row ${subtaskClass} ${mobileExpClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass} ${isNowTask(t.id) ? "is-now-task" : ""}" data-id="${t.id}">
       <div class="status-cell" data-col="status">
         <select class="status-select ${statusClass}" title="${escapeHtml(t.status || "Incomplete")}">
           <option ${t.status === "Incomplete" ? "selected" : ""}>Incomplete</option>
@@ -4537,7 +5416,12 @@ function taskRowHtml(t, opts2) {
           <option value="5" ${imp === 5 ? "selected" : ""}>5</option>
         </select>
       </div>
-      <div data-col="due"><input type="date" class="due-input" value="${t.due || ""}" style="border:1px solid var(--border); border-radius:4px; padding:3px 4px; font-size:12px; width:100%;"></div>
+      <div data-col="due">
+        <div class="due-cell-with-recur">
+          <input type="date" class="due-input" value="${t.due || ""}" style="border:1px solid var(--border); border-radius:4px; padding:3px 4px; font-size:12px;">
+          <button type="button" class="recur-mini-btn ${t.recurGroupId ? "has-rule" : ""}" data-recur-edit="${t.id}" title="${t.recurGroupId ? "Part of a recurring series — click to add more occurrences from this date" : "Make this task recurring"}">↻</button>
+        </div>
+      </div>
       <div data-col="repeat">
         <select class="recur-select" data-recur-task="${t.id}" style="width:100%; padding:4px 4px; border:1px solid var(--border); border-radius:4px; font-size:11px; background:white; ${t.recurrence ? 'color:var(--blue-1); font-weight:600;' : 'color:#7a8a8e;'}">
           <option value="" ${!t.recurrence ? "selected" : ""}>Once</option>
@@ -4548,6 +5432,8 @@ function taskRowHtml(t, opts2) {
         </select>
       </div>
       <div class="task-cell-wrapper" data-col="task">
+        <button class="focus-pin-btn ${isNowTask(t.id) ? "is-now" : ""}" data-focus-pin="${t.id}" title="${isNowTask(t.id) ? "Pinned in 'Working on now' — click to unpin" : "Pin in 'Working on now' (you can pin multiple)"}">${isNowTask(t.id) ? "📍" : "📌"}</button>
+        <button class="defer-btn ${t.status === "Waiting for response" ? "is-waiting" : ""}" data-defer-task="${t.id}" title="${t.status === "Waiting for response" ? "Update follow-up date" : "Mark as waiting for response and pick a follow-up date"}">⏳</button>
         <div class="editable task-text" contenteditable="true" data-field="task" data-empty="${!t.task}" data-placeholder="Task...">${isProcrastinating(t) ? `<span class="procrastinating" title="On your list ${daysBetween(new Date(t.createdAt), new Date())} days, or pushed ${t.dueChanges || 0}× — maybe it's time?">⏳</span>` : ""}${escapeHtml(t.task || "")}</div>
         ${hiddenSubBadge}
         <button class="add-subtask-hover" data-add-subtask="${t.id}" title="Add subtask">+</button>
@@ -4561,6 +5447,7 @@ function taskRowHtml(t, opts2) {
         </span>
       </div>
       <div class="editable next-text" contenteditable="true" data-col="next" data-field="next" data-empty="${!t.next}" data-placeholder="Next steps...">${t.next ? bulletize(t.next) : ""}</div>
+      <div data-col="lastbadgered"><input type="date" class="last-badgered-input" value="${t.lastBadgered || ""}" title="${t.lastBadgered ? `Last badgered ${fmtDate(t.lastBadgered)}` : "Click to set the last time you nudged someone"}" style="border:1px solid var(--border); border-radius:4px; padding:3px 4px; font-size:12px; width:100%;"></div>
       <div class="editable notes-text" contenteditable="true" data-col="notes" data-field="notes" data-empty="${!t.notes}" data-placeholder="Notes...">${autolink(t.notes || "")}</div>
       <div class="email-cell" data-col="email">
         <button class="email-icon link-btn ${linkActive ? "active" : ""}" title="${escapeHtml(linkTooltip)}">📎</button>
@@ -4592,13 +5479,16 @@ async function addTask() {
   let status = document.getElementById("newStatus").value;
   let importance = Number(document.getElementById("newImportance").value) || 0;
   let due = document.getElementById("newDue").value;
-  let recurrence = document.getElementById("newRecurrence").value;
+  // Recurrence is now a rule object set via the modal, stored in
+  // pendingRecurRule. Null = "Doesn't repeat" (just a regular one-off task).
+  const recurRule = pendingRecurRule;
   // Owner column was removed from the UI — new tasks default to defaultOwner.
   // The brain-dump @owner mention can still override this in the smart parser.
   let owner = defaultOwner || "";
   let task = document.getElementById("newTask").value.trim();
   let customer = document.getElementById("newCustomer").value;
   let next = document.getElementById("newNext").value.trim();
+  let lastBadgered = document.getElementById("newLastBadgered").value;
   let notes = document.getElementById("newNotes").value.trim();
 
   if (!task) {
@@ -4612,7 +5502,7 @@ async function addTask() {
   // importance, customer aliases, etc. — exactly like the dedicated brain dump
   // input. Manual entries always win, so any field she did fill in stays as-is.
   const ownerIsDefault = !owner || owner === defaultOwner;
-  const looksLikeBrainDump = !due && !customer && !next && !notes && !recurrence
+  const looksLikeBrainDump = !due && !customer && !next && !notes && !recurRule
     && importance === 0 && ownerIsDefault && !pendingEmailRef && !pendingDocLink;
 
   if (looksLikeBrainDump) {
@@ -4635,29 +5525,43 @@ async function addTask() {
   next = normalizeText(next);
   notes = normalizeText(notes);
 
-  // Apply pending email + doc references to the new task
+  // Apply pending email + doc references to the new task. The seed task
+  // (the first occurrence) is stored with recurrence cleared — recurrence
+  // is only a creation-time choice now, not a per-task ongoing setting.
   const newTask = {
     id: newId(),
     status: status || "Incomplete",
     importance,
-    due, owner, task, customer, next, notes, recurrence,
+    due, owner, task, customer, next, notes,
+    lastBadgered: lastBadgered || "",
+    recurrence: "",
     context: currentContext,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    updatedAt: Date.now()
   };
   if (pendingEmailRef) {
     setEmailReference(newTask, pendingEmailRef);
   }
   if (pendingDocLink) newTask.docLink = pendingDocLink;
   tasks.push(newTask);
+  // If the user picked a repeat rule in the modal, spawn future occurrences
+  // upfront (Outlook/Reminders-style). Each occurrence is its own independent
+  // task with its own due date and its own checkbox.
+  if (recurRule && recurRule.freq && recurRule.freq !== "none") {
+    const instances = buildRecurringInstancesFromRule(newTask, recurRule);
+    for (const inst of instances) tasks.push(inst);
+  }
   celebrateCreate();
 
   document.getElementById("newImportance").value = "0";
   document.getElementById("newDue").value = "";
-  document.getElementById("newRecurrence").value = "";
+  pendingRecurRule = null;
+  updateRecurTriggerButtonLabel();
   // Owner stays sticky — defaults to Stevie, only changes when she explicitly edits it
   document.getElementById("newTask").value = "";
   document.getElementById("newCustomer").value = "";
   document.getElementById("newNext").value = "";
+  document.getElementById("newLastBadgered").value = "";
   document.getElementById("newNotes").value = "";
   pendingEmailRef = "";
   pendingDocLink = "";
@@ -4669,6 +5573,69 @@ async function addTask() {
 
   await persist();
   render();
+}
+
+// Stamp a task's `updatedAt` so the merge in pullFromGist can do
+// last-write-wins on a per-task basis. Call this on every well-known
+// mutation (status change, due update, edit, recur edit, etc.). This is
+// what protects unpushed local edits from being clobbered by a pull.
+function stampTaskUpdated(t) {
+  if (!t) return;
+  t.updatedAt = Date.now();
+}
+
+// Generate a stable id for a side-list item that doesn't have one yet.
+function ensureSideItemId(item) {
+  if (!item.id) item.id = "li_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  return item.id;
+}
+
+// Merge two side-list arrays (shopping or grocery) using last-write-wins
+// per item (matched by `id`, with text as a fallback for legacy items).
+// Order: items present in both keep their LOCAL position; remote-only items
+// append at the end of remote's order. Local-only items (e.g., just added
+// before a pull) are kept at the end so they don't get lost.
+function mergeSideList(localArr, remoteArr) {
+  // Stamp ids on anything missing one (handles legacy data)
+  for (const it of localArr) ensureSideItemId(it);
+  for (const it of remoteArr) ensureSideItemId(it);
+  const localById = new Map(localArr.map(it => [it.id, it]));
+  const remoteById = new Map(remoteArr.map(it => [it.id, it]));
+  // Fallback match by text for legacy items whose ids might mismatch
+  // because they were generated on different devices.
+  const localByText = new Map();
+  for (const it of localArr) {
+    const k = (it.text || "").trim().toLowerCase();
+    if (k && !localByText.has(k)) localByText.set(k, it);
+  }
+  const merged = [];
+  const consumedLocalIds = new Set();
+  // Walk remote in order to preserve remote's organization
+  for (const r of remoteArr) {
+    let l = localById.get(r.id);
+    if (!l) {
+      const k = (r.text || "").trim().toLowerCase();
+      const candidate = localByText.get(k);
+      if (candidate && !consumedLocalIds.has(candidate.id)) {
+        l = candidate;
+      }
+    }
+    if (!l) {
+      merged.push(r);
+    } else {
+      consumedLocalIds.add(l.id);
+      const lTime = Number(l.updatedAt) || 0;
+      const rTime = Number(r.updatedAt) || 0;
+      merged.push(rTime > lTime ? r : l);
+    }
+  }
+  // Append local-only items (added since the last push, or remote-deleted ones)
+  for (const l of localArr) {
+    if (!consumedLocalIds.has(l.id) && !remoteById.has(l.id)) {
+      merged.push(l);
+    }
+  }
+  return merged;
 }
 
 async function updateTask(id, field, value) {
@@ -4690,6 +5657,7 @@ async function updateTask(id, field, value) {
     }
   }
   t[field] = value;
+  stampTaskUpdated(t);
   await persist();
   // Re-render after structural changes AND after text-field edits — so the user
   // sees normalizeText's capitalization/typo fixes immediately after blur,
@@ -4722,6 +5690,307 @@ async function hardDeleteTask(id) {
   render();
 }
 
+// ---------------- Deferral picker (for "Waiting for response") ----------------
+//
+// When a task is moved to "Waiting for response", we offer to push the due
+// date forward N days so the task naturally sorts down to the follow-up
+// date in the list. The modal is also available as a standalone button on
+// pinned tasks (the "Waiting" button next to Done/Unpin).
+
+let deferTargetTaskId = null;
+
+function openDeferModal(taskId) {
+  deferTargetTaskId = taskId;
+  const modal = document.getElementById("deferModal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  // Reset the custom-days input to 3 (the most-asked default)
+  const custom = document.getElementById("deferCustomDays");
+  if (custom) custom.value = 3;
+}
+
+function closeDeferModal() {
+  deferTargetTaskId = null;
+  const modal = document.getElementById("deferModal");
+  if (modal) modal.style.display = "none";
+  // Re-render so any dropdown that was visually changed to "Waiting for
+  // response" (because the modal was opened from a status-select change)
+  // snaps back to the actual t.status value. Without this, the dropdown
+  // can look stuck on "Waiting" even though the data wasn't changed.
+  render();
+}
+
+// Apply N days of deferral to the targeted task: set status = "Waiting for
+// response" and roll its due date forward to today + N days.
+async function applyDeferral(days) {
+  const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
+  if (!t) { closeDeferModal(); return; }
+  t.status = "Waiting for response";
+  const target = new Date();
+  target.setHours(0, 0, 0, 0);
+  target.setDate(target.getDate() + Math.max(1, days));
+  t.due = ymd(target);
+  stampTaskUpdated(t);
+  // Auto-unpin from "Working on now" — once a task is waiting for someone
+  // else, it's not what you're actively working on anymore.
+  const pinIdx = nowTaskIds.indexOf(t.id);
+  if (pinIdx >= 0) {
+    nowTaskIds.splice(pinIdx, 1);
+    saveNowTask();
+  }
+  closeDeferModal();
+  await persist();
+  render();
+  renderNowCard();
+  showToast(`Following up in ${days} day${days === 1 ? "" : "s"} — due ${fmtDate(t.due)}`);
+}
+
+// "Skip — keep current due date" — just set the status without rolling the date.
+async function skipDeferral() {
+  const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
+  if (!t) { closeDeferModal(); return; }
+  t.status = "Waiting for response";
+  stampTaskUpdated(t);
+  // Auto-unpin from "Working on now" (same reasoning as applyDeferral)
+  const pinIdx = nowTaskIds.indexOf(t.id);
+  if (pinIdx >= 0) {
+    nowTaskIds.splice(pinIdx, 1);
+    saveNowTask();
+  }
+  closeDeferModal();
+  await persist();
+  render();
+  renderNowCard();
+}
+
+function initDeferModal() {
+  const close = document.getElementById("deferCloseBtn");
+  if (close) close.addEventListener("click", closeDeferModal);
+  const cancel = document.getElementById("deferCancelBtn");
+  if (cancel) cancel.addEventListener("click", closeDeferModal);
+  const skip = document.getElementById("deferSkipBtn");
+  if (skip) skip.addEventListener("click", skipDeferral);
+  const modal = document.getElementById("deferModal");
+  if (modal) modal.addEventListener("click", e => {
+    if (e.target === modal) closeDeferModal();
+  });
+  // Preset buttons (Tomorrow / 3 days / 1 week / etc.)
+  document.querySelectorAll(".defer-preset").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const days = Number(btn.dataset.deferDays) || 1;
+      applyDeferral(days);
+    });
+  });
+  // Custom days "Apply" button
+  const customGo = document.getElementById("deferCustomGoBtn");
+  if (customGo) customGo.addEventListener("click", () => {
+    const v = Math.max(1, Number(document.getElementById("deferCustomDays").value) || 1);
+    applyDeferral(v);
+  });
+  // Escape closes
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && modal && modal.style.display === "flex") {
+      closeDeferModal();
+    }
+  });
+}
+
+// ---------------- "Working on now" focus card ----------------
+//
+// ADHD-friendly multi-task focus indicator. Pin one or several tasks as "now";
+// the IDs live in localStorage so the focus persists across reloads. Each
+// pinned task is shown as its own bold mini-card in a list at the top of the
+// page, and the matching rows in the task list also get a highlight.
+
+const NOW_TASK_KEY = "stevies-now-task-ids";
+const NOW_TASK_KEY_LEGACY = "stevies-now-task-id";  // backward-compat
+let nowTaskIds = [];
+
+function loadNowTask() {
+  try {
+    const raw = localStorage.getItem(NOW_TASK_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      nowTaskIds = Array.isArray(parsed) ? parsed.filter(x => typeof x === "string" && x) : [];
+    } else {
+      // Migrate legacy single-id key
+      const legacy = localStorage.getItem(NOW_TASK_KEY_LEGACY);
+      nowTaskIds = legacy ? [legacy] : [];
+      if (legacy) {
+        localStorage.setItem(NOW_TASK_KEY, JSON.stringify(nowTaskIds));
+        localStorage.removeItem(NOW_TASK_KEY_LEGACY);
+      }
+    }
+  } catch (e) { nowTaskIds = []; }
+}
+
+function saveNowTask() {
+  try {
+    if (nowTaskIds.length) localStorage.setItem(NOW_TASK_KEY, JSON.stringify(nowTaskIds));
+    else localStorage.removeItem(NOW_TASK_KEY);
+  } catch (e) { /* quota/private mode — ignore */ }
+}
+
+function isNowTask(id) { return id && nowTaskIds.includes(id); }
+
+// Toggle a task's pinned state. Adds to the front of the list (most recently
+// pinned shows first) so the latest thing the user grabbed is most prominent.
+function setNowTask(id) {
+  if (!id) return;
+  const idx = nowTaskIds.indexOf(id);
+  if (idx >= 0) nowTaskIds.splice(idx, 1);
+  else nowTaskIds.unshift(id);
+  saveNowTask();
+  renderNowCard();
+  render();  // refresh the list so the highlighted rows update
+}
+
+function unpinNowTask(id) {
+  const idx = nowTaskIds.indexOf(id);
+  if (idx < 0) return;
+  nowTaskIds.splice(idx, 1);
+  saveNowTask();
+  renderNowCard();
+  render();
+}
+
+function clearNowTask() {
+  nowTaskIds = [];
+  saveNowTask();
+  renderNowCard();
+  render();
+}
+
+function renderNowCard() {
+  const card = document.getElementById("nowCard");
+  if (!card) return;
+  // Filter out IDs whose tasks no longer exist, are deleted, or are complete.
+  // This auto-cleans the pin list as tasks get done.
+  const validTasks = nowTaskIds
+    .map(id => tasks.find(x => x.id === id))
+    .filter(t => t && !t.deletedAt && t.status !== "Complete");
+  const validIds = validTasks.map(t => t.id);
+  if (validIds.length !== nowTaskIds.length) {
+    nowTaskIds = validIds;
+    saveNowTask();
+  }
+  if (!validTasks.length) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const body = document.getElementById("nowCardBody");
+  body.innerHTML = validTasks.map(t => {
+    const meta = [];
+    if (t.due) meta.push(`<span class="now-meta-item">📅 ${escapeHtml(fmtDate(t.due))}</span>`);
+    if (t.customer) {
+      // Use the same .customer-chip styling that's used in the task list, so
+      // the chip looks identical (same color, same shape, same padding).
+      const { cls, styleAttr } = customerStyle(t.customer);
+      meta.push(`<span class="customer-chip ${cls}" ${styleAttr}>${escapeHtml(t.customer)}</span>`);
+    }
+    if (t.context && t.context !== currentContext) {
+      const otherLabel = t.context === "personal" ? "🌸 Personal" : "💼 Work";
+      meta.push(`<span class="now-meta-item" style="font-style: italic;">on ${otherLabel}</span>`);
+    }
+    // Next Steps — render as a bulleted list under the title so it acts as
+    // an at-a-glance "what to do next" reminder while the task is pinned.
+    // Hidden when there are no next steps so the card stays tight.
+    const nextHtml = t.next
+      ? `<div class="now-next-steps">${bulletize(t.next)}</div>`
+      : "";
+    return `
+      <div class="now-item" data-now-id="${t.id}" data-now-idx="${validIds.indexOf(t.id)}" draggable="true">
+        <div class="now-item-actions">
+          <button type="button" class="now-card-btn now-card-waiting-btn" data-now-waiting="${t.id}" title="Mark as waiting for response (and pick a follow-up date)" draggable="false">⏳</button>
+          <button type="button" class="now-card-btn now-card-done-btn" data-now-done="${t.id}" title="Mark this task complete" draggable="false">✓</button>
+          <button type="button" class="now-card-btn now-card-clear-btn" data-now-unpin="${t.id}" title="Unpin" draggable="false">×</button>
+        </div>
+        <div class="now-item-text">${escapeHtml(t.task || "")}</div>
+        ${nextHtml}
+        ${meta.length ? `<div class="now-meta">${meta.join("")}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+
+  // Drag-and-drop reorder for the pinned list. Rearranges `nowTaskIds`
+  // and re-renders. Same pattern as the side-list drag-drop.
+  body.querySelectorAll(".now-item").forEach(item => {
+    const fromIdx = Number(item.dataset.nowIdx);
+    item.addEventListener("dragstart", e => {
+      window._nowDragSrc = fromIdx;
+      item.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", String(fromIdx)); } catch {}
+    });
+    item.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      body.querySelectorAll(".now-item.drag-over").forEach(x => x.classList.remove("drag-over"));
+      window._nowDragSrc = null;
+    });
+    item.addEventListener("dragover", e => {
+      if (window._nowDragSrc == null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      item.classList.add("drag-over");
+    });
+    item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
+    item.addEventListener("drop", e => {
+      e.preventDefault();
+      item.classList.remove("drag-over");
+      const src = window._nowDragSrc;
+      const dst = Number(item.dataset.nowIdx);
+      if (src == null || src === dst || isNaN(src) || isNaN(dst)) return;
+      const [moved] = nowTaskIds.splice(src, 1);
+      const insertAt = dst > src ? dst - 1 : dst;
+      nowTaskIds.splice(insertAt, 0, moved);
+      saveNowTask();
+      renderNowCard();
+    });
+  });
+
+  // Wire up per-item action buttons
+  body.querySelectorAll("[data-now-done]").forEach(b => {
+    b.addEventListener("click", async e => {
+      e.stopPropagation();
+      const id = b.dataset.nowDone;
+      const t = tasks.find(x => x.id === id);
+      if (!t) { unpinNowTask(id); return; }
+      t.status = "Complete";
+      t.completedAt = new Date().toISOString();
+      celebrateComplete();
+      // Auto-unpin on completion (the renderNowCard filter would do this anyway,
+      // but doing it explicitly keeps the saved state tidy).
+      const idx = nowTaskIds.indexOf(id);
+      if (idx >= 0) nowTaskIds.splice(idx, 1);
+      saveNowTask();
+      await persist();
+      render();
+      renderNowCard();
+    });
+  });
+  body.querySelectorAll("[data-now-unpin]").forEach(b => {
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      unpinNowTask(b.dataset.nowUnpin);
+    });
+  });
+  body.querySelectorAll("[data-now-waiting]").forEach(b => {
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      // Open the deferral picker — the modal sets the status to "Waiting for
+      // response" and rolls the due date forward by the chosen number of days.
+      openDeferModal(b.dataset.nowWaiting);
+    });
+  });
+}
+
+// Wire up the Now card's "Clear all" button (called once at startup)
+function initNowCard() {
+  const clearBtn = document.getElementById("nowClearBtn");
+  if (clearBtn) clearBtn.addEventListener("click", clearNowTask);
+}
+
 // ---------------- Wire up ----------------
 // Prevent the browser from navigating to dropped files outside drop targets
 window.addEventListener("dragover", e => e.preventDefault());
@@ -4730,6 +5999,17 @@ window.addEventListener("drop", e => e.preventDefault());
 document.getElementById("connectBtn").addEventListener("click", connectNewFile);
 document.getElementById("reconnectBtn").addEventListener("click", reconnect);
 document.getElementById("addBtn").addEventListener("click", addTask);
+
+// Wire up the Outlook-style recurrence picker modal (open button + modal handlers)
+initRecurModal();
+
+// Load the current "Working on now" task ID from localStorage, then wire up
+// the card's Done / Clear buttons. The card itself renders inside render().
+loadNowTask();
+initNowCard();
+
+// Wire up the deferral picker (opens when a task moves to "Waiting for response")
+initDeferModal();
 
 // "+ New Task" header is a toggle: click to expand/collapse the form. Default
 // state is collapsed (just the header). Form auto-collapses after a successful
@@ -4745,7 +6025,7 @@ document.getElementById("newTaskHeader").addEventListener("keydown", e => {
 });
 
 // ---------------- Column resizing & row density ----------------
-const COL_NAMES = ["status","importance","due","repeat","owner","task","customer","next","notes","email","doc","delete"];
+const COL_NAMES = ["status","importance","due","repeat","owner","task","customer","next","lastbadgered","notes","email","doc","delete"];
 const COL_RESIZE_KEY = "stevies-col-widths";
 const ROW_DENSITY_KEY = "stevies-row-density";
 const COL_DEFAULTS = {
@@ -5127,6 +6407,500 @@ function nextRecurrence(currentDueStr, recurrence) {
   return ymd(base);
 }
 
+// ---------------- Recurrence (Outlook-style) ----------------
+
+// Hard cap to prevent runaway lists when "No end date" is selected
+// or when a rule + interval combination wouldn't otherwise terminate.
+const RECUR_HARD_CAP = 200;
+
+// Expand a recurrence rule into an array of YYYY-MM-DD due dates,
+// starting at startDate (inclusive). Returns dates in chronological order.
+//
+// Rule shape:
+//   { freq: "daily"|"weekly"|"monthly"|"yearly"|"none",
+//     interval: number,
+//     weekdaysOnly: bool,                   // daily only
+//     byDay: [0..6],                        // weekly: which days of week
+//     monthlyMode: "dayOfMonth"|"dayOfWeek",
+//     dayOfMonth: number,                   // monthly dayOfMonth
+//     weekOfMonth: 1..4 | -1,               // monthly dayOfWeek (-1 = last)
+//     weekDay: 0..6,                        // monthly dayOfWeek
+//     yearlyMode: "dayOfMonth"|"dayOfWeek",
+//     yearMonth: 1..12,                     // yearly dayOfMonth
+//     yearDay: 1..31,                       // yearly dayOfMonth
+//     yearWeekOfMonth: 1..4 | -1,           // yearly dayOfWeek
+//     yearWeekDay: 0..6,                    // yearly dayOfWeek
+//     yearMonth2: 1..12,                    // yearly dayOfWeek's month
+//     endMode: "afterN"|"byDate"|"never",
+//     endAfter: number,
+//     endBy: "YYYY-MM-DD" }
+function expandRecurRule(rule, startDate) {
+  if (!rule || rule.freq === "none" || !rule.freq) return [];
+  const start = new Date(startDate + "T00:00:00");
+  if (isNaN(start.getTime())) return [];
+
+  // Cap the absolute number of occurrences regardless of end mode.
+  const targetCount = rule.endMode === "afterN"
+    ? Math.min(Math.max(rule.endAfter || 1, 1), RECUR_HARD_CAP)
+    : RECUR_HARD_CAP;
+  const endByDate = rule.endMode === "byDate" && rule.endBy
+    ? new Date(rule.endBy + "T00:00:00")
+    : null;
+
+  // Default byDay for weekly: the start date's weekday
+  const byDay = (rule.byDay && rule.byDay.length)
+    ? [...rule.byDay].sort()
+    : [start.getDay()];
+  const interval = Math.max(rule.interval || 1, 1);
+
+  const out = [];
+  // Iterate day by day from start. For each day, test whether it matches the rule.
+  // Safety cap on iteration count — 5000 days = ~13 years, plenty even for
+  // weekly-on-Friday with No End Date capped at 200.
+  let cursor = new Date(start);
+  for (let i = 0; i < 5000 && out.length < targetCount; i++) {
+    if (endByDate && cursor > endByDate) break;
+    if (recurMatchesRule(rule, cursor, start, byDay, interval)) {
+      out.push(ymd(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+function recurMatchesRule(rule, day, start, byDay, interval) {
+  // Daily
+  if (rule.freq === "daily") {
+    if (rule.weekdaysOnly) {
+      return day.getDay() !== 0 && day.getDay() !== 6;
+    }
+    const diffDays = Math.round((day - start) / 86400000);
+    return diffDays >= 0 && diffDays % interval === 0;
+  }
+  // Weekly
+  if (rule.freq === "weekly") {
+    if (!byDay.includes(day.getDay())) return false;
+    // Compute "weeks since the start of start's week" so all days in the
+    // same week are grouped under the same interval bucket.
+    const startWeek = startOfWeek(start);
+    const dayWeek = startOfWeek(day);
+    const diffWeeks = Math.round((dayWeek - startWeek) / (86400000 * 7));
+    return diffWeeks >= 0 && diffWeeks % interval === 0;
+  }
+  // Monthly
+  if (rule.freq === "monthly") {
+    const monthsSince =
+      (day.getFullYear() - start.getFullYear()) * 12 +
+      (day.getMonth() - start.getMonth());
+    if (monthsSince < 0 || monthsSince % interval !== 0) return false;
+    if (rule.monthlyMode === "dayOfWeek") {
+      return matchesNthWeekdayOfMonth(day, rule.weekOfMonth, rule.weekDay);
+    }
+    // dayOfMonth (default): match the chosen day-of-month, clamping to the
+    // last day if the chosen value doesn't exist this month (e.g., 31st in February).
+    const target = clampDayOfMonth(day.getFullYear(), day.getMonth(), rule.dayOfMonth || 1);
+    return day.getDate() === target;
+  }
+  // Yearly
+  if (rule.freq === "yearly") {
+    const yearsSince = day.getFullYear() - start.getFullYear();
+    if (yearsSince < 0 || yearsSince % interval !== 0) return false;
+    if (rule.yearlyMode === "dayOfWeek") {
+      const targetMonth = (rule.yearMonth2 || 1) - 1;
+      if (day.getMonth() !== targetMonth) return false;
+      return matchesNthWeekdayOfMonth(day, rule.yearWeekOfMonth, rule.yearWeekDay);
+    }
+    const targetMonth = (rule.yearMonth || 1) - 1;
+    if (day.getMonth() !== targetMonth) return false;
+    const target = clampDayOfMonth(day.getFullYear(), targetMonth, rule.yearDay || 1);
+    return day.getDate() === target;
+  }
+  return false;
+}
+
+function startOfWeek(d) {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  out.setDate(out.getDate() - out.getDay());
+  return out;
+}
+
+function clampDayOfMonth(year, month, day) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return Math.min(day, lastDay);
+}
+
+// True if `day` is the Nth occurrence of its weekday in its month (or the
+// last if weekOfMonth === -1 and there isn't an Nth).
+function matchesNthWeekdayOfMonth(day, weekOfMonth, weekDay) {
+  if (day.getDay() !== weekDay) return false;
+  const occurrence = Math.ceil(day.getDate() / 7);
+  if (weekOfMonth === -1 || weekOfMonth === "-1") {
+    // Last occurrence: next 7 days roll into a new month
+    const next = new Date(day);
+    next.setDate(next.getDate() + 7);
+    return next.getMonth() !== day.getMonth();
+  }
+  return occurrence === Number(weekOfMonth);
+}
+
+// Build a human-readable summary of the rule, like Outlook's status line.
+function summarizeRecurRule(rule) {
+  if (!rule || rule.freq === "none" || !rule.freq) return "Doesn't repeat";
+  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const longDayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const ordinals = { 1: "first", 2: "second", 3: "third", 4: "fourth", "-1": "last" };
+  const interval = Math.max(rule.interval || 1, 1);
+  let pattern = "";
+  switch (rule.freq) {
+    case "daily":
+      if (rule.weekdaysOnly) pattern = "Every weekday";
+      else pattern = interval === 1 ? "Daily" : `Every ${interval} days`;
+      break;
+    case "weekly": {
+      const days = (rule.byDay && rule.byDay.length)
+        ? rule.byDay.slice().sort().map(d => dayNames[d]).join(", ")
+        : "—";
+      pattern = interval === 1 ? `Weekly on ${days}` : `Every ${interval} weeks on ${days}`;
+      break;
+    }
+    case "monthly": {
+      const every = interval === 1 ? "month" : `${interval} months`;
+      if (rule.monthlyMode === "dayOfWeek") {
+        const which = ordinals[rule.weekOfMonth] || "last";
+        pattern = `Every ${every} on the ${which} ${longDayNames[rule.weekDay]}`;
+      } else {
+        pattern = `Every ${every} on day ${rule.dayOfMonth || 1}`;
+      }
+      pattern = pattern.replace(/^Every month/, "Monthly").replace(/^Every \d+ months/, m => m);
+      break;
+    }
+    case "yearly": {
+      const every = interval === 1 ? "year" : `${interval} years`;
+      if (rule.yearlyMode === "dayOfWeek") {
+        const which = ordinals[rule.yearWeekOfMonth] || "last";
+        pattern = `Every ${every} on the ${which} ${longDayNames[rule.yearWeekDay]} of ${monthNames[(rule.yearMonth2 || 1) - 1]}`;
+      } else {
+        pattern = `Every ${every} on ${monthNames[(rule.yearMonth || 1) - 1]} ${rule.yearDay || 1}`;
+      }
+      pattern = pattern.replace(/^Every year/, "Yearly");
+      break;
+    }
+  }
+  let endText = "";
+  if (rule.endMode === "afterN") endText = `, ${rule.endAfter || 1} time${(rule.endAfter || 1) === 1 ? "" : "s"}`;
+  else if (rule.endMode === "byDate" && rule.endBy) endText = `, until ${fmtDate(rule.endBy)}`;
+  return pattern + endText;
+}
+
+// Default rule, seeded to match the user's chosen due date if any. We pick
+// "weekly on the due-date weekday, every 1 week, 12 occurrences" because
+// that's the most-asked recurrence pattern.
+function defaultRecurRule(seedDateStr) {
+  const seed = seedDateStr ? new Date(seedDateStr + "T00:00:00") : new Date();
+  if (isNaN(seed.getTime())) seed.setTime(Date.now());
+  return {
+    freq: "weekly",
+    interval: 1,
+    weekdaysOnly: false,
+    byDay: [seed.getDay()],
+    monthlyMode: "dayOfMonth",
+    dayOfMonth: seed.getDate(),
+    weekOfMonth: Math.min(Math.ceil(seed.getDate() / 7), 4),
+    weekDay: seed.getDay(),
+    yearlyMode: "dayOfMonth",
+    yearMonth: seed.getMonth() + 1,
+    yearDay: seed.getDate(),
+    yearMonth2: seed.getMonth() + 1,
+    yearWeekOfMonth: Math.min(Math.ceil(seed.getDate() / 7), 4),
+    yearWeekDay: seed.getDay(),
+    endMode: "afterN",
+    endAfter: 12,
+    endBy: ""
+  };
+}
+
+// Build all instances for a seed task using the rule. The seed task itself
+// is treated as the first occurrence — its due date is preserved if it
+// matches the rule, otherwise it's overwritten by the first generated date.
+// Returns extra instances (not including the seed) ready to push into `tasks`.
+function buildRecurringInstancesFromRule(seed, rule) {
+  if (!rule || rule.freq === "none") return [];
+  const startDate = seed.due || ymd(new Date());
+  const dates = expandRecurRule(rule, startDate);
+  if (!dates.length) return [];
+  // The seed occupies the first matching date. If the seed's due date didn't
+  // match the rule (e.g., user picked a Tuesday but rule says Mondays), we
+  // re-anchor the seed to the first generated date.
+  if (seed.due !== dates[0]) seed.due = dates[0];
+  const groupId = seed.recurGroupId || newId();
+  seed.recurGroupId = groupId;
+  const out = [];
+  for (let i = 1; i < dates.length; i++) {
+    out.push({
+      ...seed,
+      id: newId(),
+      due: dates[i],
+      status: "Incomplete",
+      completedAt: null,
+      recurrence: "",
+      recurGroupId: groupId,
+      createdAt: Date.now() + i
+    });
+  }
+  return out;
+}
+
+// ---- Recurrence picker modal state ----
+// pendingRecurRule holds the rule chosen in the modal for a NEW task. Cleared
+// after the task is added. Null = "Doesn't repeat".
+let pendingRecurRule = null;
+// recurModalContext describes which task the modal is currently editing:
+//   { mode: "new" }         — applies to the next addTask (uses pendingRecurRule)
+//   { mode: "existing", taskId } — applies the rule to an existing task right now
+let recurModalContext = { mode: "new" };
+
+// Open the recurrence picker. Pass a taskId to edit an existing task (the
+// rule will be applied immediately on Save, spawning future occurrences from
+// that task's due date forward). Omit it for the new-task workflow.
+function openRecurModal(taskId) {
+  if (taskId) {
+    recurModalContext = { mode: "existing", taskId };
+    const t = tasks.find(x => x.id === taskId);
+    const seedDate = (t && t.due) ? t.due : ymd(new Date());
+    applyRuleToModal(defaultRecurRule(seedDate));
+  } else {
+    recurModalContext = { mode: "new" };
+    const seedDate = document.getElementById("newDue").value || ymd(new Date());
+    const rule = pendingRecurRule ? { ...pendingRecurRule } : defaultRecurRule(seedDate);
+    applyRuleToModal(rule);
+  }
+  document.getElementById("recurModal").style.display = "flex";
+}
+
+// Apply a rule to an existing task: spawn future occurrences as independent
+// tasks. The seed task itself stays put — its due date is left alone unless
+// the rule's first generated date doesn't match (in which case the seed's
+// due date is rolled forward to the first matching date).
+async function applyRuleToExistingTask(taskId, rule) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t || !rule || rule.freq === "none") return 0;
+  if (!t.due) t.due = ymd(new Date());
+  const instances = buildRecurringInstancesFromRule(t, rule);
+  for (const inst of instances) tasks.push(inst);
+  await persist();
+  render();
+  return instances.length;
+}
+
+function closeRecurModal() {
+  document.getElementById("recurModal").style.display = "none";
+}
+
+// Push a rule object into the form controls
+function applyRuleToModal(rule) {
+  document.getElementById("recurFreq").value = rule.freq || "none";
+  // Mirror to visible pattern tabs (the dropdown is hidden, tabs are the UI)
+  document.querySelectorAll("#recurPatternTabs .recur-pattern-tab").forEach(tab => {
+    tab.classList.toggle("active", tab.dataset.freq === rule.freq);
+  });
+  document.getElementById("recurInterval").value = rule.interval || 1;
+  document.getElementById("recurWeekdaysOnly").checked = !!rule.weekdaysOnly;
+  // Weekday pills
+  document.querySelectorAll("#recurWeekdayPills .weekday-pill").forEach(p => {
+    const d = Number(p.dataset.day);
+    p.classList.toggle("active", (rule.byDay || []).includes(d));
+  });
+  // Monthly
+  document.querySelectorAll('input[name="recurMonthlyMode"]').forEach(r => {
+    r.checked = r.value === (rule.monthlyMode || "dayOfMonth");
+  });
+  document.getElementById("recurDayOfMonth").value = rule.dayOfMonth || 1;
+  document.getElementById("recurMonthlyWeekOfMonth").value = String(rule.weekOfMonth || 1);
+  document.getElementById("recurMonthlyWeekDay").value = String(rule.weekDay || 1);
+  // Yearly
+  document.querySelectorAll('input[name="recurYearlyMode"]').forEach(r => {
+    r.checked = r.value === (rule.yearlyMode || "dayOfMonth");
+  });
+  document.getElementById("recurYearlyMonth").value = String(rule.yearMonth || 1);
+  document.getElementById("recurYearlyDayOfMonth").value = rule.yearDay || 1;
+  document.getElementById("recurYearlyWeekOfMonth").value = String(rule.yearWeekOfMonth || 1);
+  document.getElementById("recurYearlyWeekDay").value = String(rule.yearWeekDay || 1);
+  document.getElementById("recurYearlyMonth2").value = String(rule.yearMonth2 || 1);
+  // End
+  document.querySelectorAll('input[name="recurEndMode"]').forEach(r => {
+    r.checked = r.value === (rule.endMode || "afterN");
+  });
+  document.getElementById("recurEndAfter").value = rule.endAfter || 12;
+  document.getElementById("recurEndBy").value = rule.endBy || "";
+  refreshRecurModalUI();
+}
+
+// Read the form controls back into a rule object
+function readRuleFromModal() {
+  const byDay = [...document.querySelectorAll("#recurWeekdayPills .weekday-pill.active")]
+    .map(p => Number(p.dataset.day));
+  const get = id => document.getElementById(id);
+  const radio = name => {
+    const el = document.querySelector(`input[name="${name}"]:checked`);
+    return el ? el.value : null;
+  };
+  return {
+    freq: get("recurFreq").value,
+    interval: Math.max(Number(get("recurInterval").value) || 1, 1),
+    weekdaysOnly: get("recurWeekdaysOnly").checked,
+    byDay,
+    monthlyMode: radio("recurMonthlyMode") || "dayOfMonth",
+    dayOfMonth: Math.max(Math.min(Number(get("recurDayOfMonth").value) || 1, 31), 1),
+    weekOfMonth: Number(get("recurMonthlyWeekOfMonth").value),
+    weekDay: Number(get("recurMonthlyWeekDay").value),
+    yearlyMode: radio("recurYearlyMode") || "dayOfMonth",
+    yearMonth: Number(get("recurYearlyMonth").value),
+    yearDay: Math.max(Math.min(Number(get("recurYearlyDayOfMonth").value) || 1, 31), 1),
+    yearWeekOfMonth: Number(get("recurYearlyWeekOfMonth").value),
+    yearWeekDay: Number(get("recurYearlyWeekDay").value),
+    yearMonth2: Number(get("recurYearlyMonth2").value),
+    endMode: radio("recurEndMode") || "afterN",
+    endAfter: Math.max(Number(get("recurEndAfter").value) || 1, 1),
+    endBy: get("recurEndBy").value
+  };
+}
+
+// Update the modal's frequency-specific sections, unit label, and live summary
+function refreshRecurModalUI() {
+  const rule = readRuleFromModal();
+  const card = document.querySelector(".recur-modal-card");
+  if (card) card.dataset.activeFreq = rule.freq || "none";
+  const units = { daily: "day(s)", weekly: "week(s)", monthly: "month(s)", yearly: "year(s)", none: "" };
+  const unitLabel = document.getElementById("recurUnitLabel");
+  if (unitLabel) unitLabel.textContent = units[rule.freq] || "";
+  const summary = document.getElementById("recurSummary");
+  if (summary) summary.textContent = summarizeRecurRule(rule);
+}
+
+function updateRecurTriggerButtonLabel() {
+  // The new-task ↻ mini-button next to the date input gets highlighted when
+  // a rule is set, with the summary as tooltip.
+  const mini = document.getElementById("newRecurMiniBtn");
+  if (mini) {
+    if (pendingRecurRule && pendingRecurRule.freq && pendingRecurRule.freq !== "none") {
+      mini.classList.add("has-rule");
+      mini.title = summarizeRecurRule(pendingRecurRule);
+    } else {
+      mini.classList.remove("has-rule");
+      mini.title = "Set repeat / recurrence";
+    }
+  }
+}
+
+// Wire up modal handlers (called once at page load)
+function initRecurModal() {
+  // New-task ↻ button (next to the date input in the add-row)
+  const miniBtn = document.getElementById("newRecurMiniBtn");
+  if (miniBtn) miniBtn.addEventListener("click", () => openRecurModal());
+
+  const close = document.getElementById("recurCloseBtn");
+  if (close) close.addEventListener("click", closeRecurModal);
+
+  const cancel = document.getElementById("recurCancelBtn");
+  if (cancel) cancel.addEventListener("click", closeRecurModal);
+
+  // "Don't repeat" — for the new-task mode, clears pendingRecurRule. For
+  // existing-task mode, this button isn't very meaningful (the task is
+  // already a one-off task) so we just close the modal.
+  const clear = document.getElementById("recurClearBtn");
+  if (clear) clear.addEventListener("click", () => {
+    if (recurModalContext.mode === "new") {
+      pendingRecurRule = null;
+      updateRecurTriggerButtonLabel();
+    }
+    closeRecurModal();
+  });
+
+  // Pattern tabs: clicking a tab sets the hidden recurFreq select and triggers
+  // the same refresh as a dropdown change would have.
+  document.querySelectorAll("#recurPatternTabs .recur-pattern-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll("#recurPatternTabs .recur-pattern-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      document.getElementById("recurFreq").value = tab.dataset.freq;
+      // Seed weekly's byDay with the chosen due date's weekday if no days picked yet
+      if (tab.dataset.freq === "weekly") {
+        const anyActive = document.querySelector("#recurWeekdayPills .weekday-pill.active");
+        if (!anyActive) {
+          const seedDate = document.getElementById("newDue").value || ymd(new Date());
+          const seedDay = new Date(seedDate + "T00:00:00").getDay();
+          const pill = document.querySelector(`#recurWeekdayPills .weekday-pill[data-day="${seedDay}"]`);
+          if (pill) pill.classList.add("active");
+        }
+      }
+      refreshRecurModalUI();
+    });
+  });
+
+  const save = document.getElementById("recurSaveBtn");
+  if (save) save.addEventListener("click", async () => {
+    const rule = readRuleFromModal();
+    // Validate: weekly with no days picked → fall back to seed-date weekday
+    if (rule.freq === "weekly" && rule.byDay.length === 0) {
+      const seedDate = recurModalContext.mode === "existing"
+        ? (tasks.find(t => t.id === recurModalContext.taskId)?.due || ymd(new Date()))
+        : (document.getElementById("newDue").value || ymd(new Date()));
+      rule.byDay = [new Date(seedDate + "T00:00:00").getDay()];
+    }
+    if (recurModalContext.mode === "existing") {
+      // Apply to an existing task: spawn future occurrences immediately.
+      if (rule.freq === "none") {
+        showToast("Pick a frequency or hit \"Don't repeat\" to cancel");
+        return;
+      }
+      const added = await applyRuleToExistingTask(recurModalContext.taskId, rule);
+      if (added) showToast(`Added ${added} more occurrence${added === 1 ? "" : "s"}`);
+    } else {
+      // New-task mode: stash the rule for addTask to consume later.
+      pendingRecurRule = rule.freq === "none" ? null : rule;
+      updateRecurTriggerButtonLabel();
+    }
+    closeRecurModal();
+  });
+
+  // Click outside the card to dismiss
+  const modal = document.getElementById("recurModal");
+  if (modal) modal.addEventListener("click", e => {
+    if (e.target === modal) closeRecurModal();
+  });
+
+  // Escape to close
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && modal && modal.style.display === "flex") {
+      closeRecurModal();
+    }
+  });
+
+  // Weekday pills
+  document.querySelectorAll("#recurWeekdayPills .weekday-pill").forEach(pill => {
+    pill.addEventListener("click", () => {
+      pill.classList.toggle("active");
+      refreshRecurModalUI();
+    });
+  });
+
+  // Live UI refresh on every change in the modal
+  ["recurFreq","recurInterval","recurWeekdaysOnly","recurDayOfMonth",
+   "recurMonthlyWeekOfMonth","recurMonthlyWeekDay",
+   "recurYearlyMonth","recurYearlyDayOfMonth","recurYearlyWeekOfMonth",
+   "recurYearlyWeekDay","recurYearlyMonth2","recurEndAfter","recurEndBy"
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", refreshRecurModalUI);
+    if (el) el.addEventListener("change", refreshRecurModalUI);
+  });
+  document.querySelectorAll('input[name="recurMonthlyMode"], input[name="recurYearlyMode"], input[name="recurEndMode"]').forEach(r => {
+    r.addEventListener("change", refreshRecurModalUI);
+  });
+}
+
 function compareTasks(a, b, field, dir) {
   let cmp = 0;
   switch (field) {
@@ -5435,24 +7209,24 @@ const MONTH_NAMES_FULL = ["January","February","March","April","June","July","Au
 function fixProperNouns(s) {
   if (!s) return s;
 
-  // 1. Multi-word title-case phrases first (longest first to avoid partial overlaps)
-  const phrases = [...TITLE_CASE_PHRASES].sort((a,b) => b.length - a.length);
-  for (const phrase of phrases) {
-    const re = new RegExp(`\\b${escapeRegex(phrase)}\\b`, "gi");
-    s = s.replace(re, phrase);
-  }
+  // Title-case phrases (TITLE_CASE_PHRASES) intentionally skipped per user
+  // request — too many false positives on phrases that double as verbs.
 
-  // 2. Days of week
+  // 1. Days of week
   for (const d of DAY_NAMES) {
     s = s.replace(new RegExp(`\\b${d}\\b`, "gi"), d);
   }
 
-  // 3. Months (except May)
+  // 2. Months (except May — also a modal verb)
   for (const m of MONTH_NAMES_FULL) {
     s = s.replace(new RegExp(`\\b${m}\\b`, "gi"), m);
   }
+  // 2a. May only when followed by a day number (so "may need to call" stays
+  // lowercase but "may 15" / "may 15th" gets capitalized)
+  s = s.replace(/\bmay\s+(\d{1,2})(st|nd|rd|th)?\b/gi, (m, d, suf) => `May ${d}${suf || ""}`);
 
-  // 4. First names + user-defined custom names (handles possessives: "raegen's" → "Raegen's")
+  // 3. First names + user-defined custom names (handles possessives:
+  //    "raegen's" → "Raegen's"). Custom names override built-ins.
   const nameMap = {};
   for (const n of FIRST_NAMES) nameMap[n.toLowerCase()] = n;
   for (const n of customNames) {
@@ -5490,6 +7264,17 @@ function preserveCase(original, replacement) {
 function normalizeText(s) {
   if (!s) return s;
 
+  // Capitalization rules per user's request:
+  //   • First letter of the entire task only (no sentence-case after periods)
+  //   • Days of the week (Monday, Tuesday, ...)
+  //   • Month names (January, ..., December — May only when followed by a day)
+  //   • FIRST_NAMES (common first names)
+  //   • User-defined "Always Capitalize" list (overrides built-ins)
+  // Intentionally skipped:
+  //   • Epic product names (EpicCare, MyChart, SmartPhrase, etc.)
+  //   • TITLE_CASE_PHRASES (workplace phrases that double as verbs)
+  //   • Sentence-case-after-period
+
   // 1. Typo fixes — word boundaries, case-preserving
   s = s.replace(/\b([A-Za-z']+)\b/g, (match) => {
     const lower = match.toLowerCase();
@@ -5500,30 +7285,24 @@ function normalizeText(s) {
   // 2. Lone "i" → "I"
   s = s.replace(/\bi\b/g, "I");
 
-  // 3. Punctuation normalization
+  // 3. Punctuation normalization (whitespace + dangling punct)
   s = s
-    .replace(/\s+([,.;:!?])/g, "$1")        // remove space before punctuation
+    .replace(/\s+([,.;:!?])/g, "$1")            // remove space before punctuation
     .replace(/([,.;:])(?=[^\s.,;:!?])/g, "$1 ") // ensure space after , . ; :
-    .replace(/\.{2,}/g, ".")                // collapse multiple periods
-    .replace(/,{2,}/g, ",")                 // collapse multiple commas
+    .replace(/\.{2,}/g, ".")                    // collapse multiple periods
+    .replace(/,{2,}/g, ",")                     // collapse multiple commas
     .replace(/\s{2,}/g, " ")
     .trim();
+  s = s.replace(/[,;:\s]+$/, "");               // trim trailing punctuation
 
-  // 4. Strip dangling punctuation at end
-  s = s.replace(/[,;:\s]+$/, "");
-
-  // 5. Capitalize first letter of the whole string
+  // 4. Capitalize ONLY the first letter of the entire string
   if (s.length > 0) {
     s = s[0].toUpperCase() + s.slice(1);
   }
 
-  // 6. Capitalize after sentence end (. ! ?)
-  s = s.replace(/([.!?])\s+([a-z])/g, (_, p, c) => `${p} ${c.toUpperCase()}`);
-
-  // 7. Fix Epic product / module / acronym capitalization to match Galaxy/wiki conventions
-  s = fixEpicCapitalization(s);
-
-  // 8. Fix proper nouns: people's names, days, months, common workplace phrases
+  // 5. Days, months, first names, and the user's "Always Capitalize" list.
+  //    Custom names take precedence over built-ins (so "iPhone" beats
+  //    any conflicting first-name entry).
   s = fixProperNouns(s);
 
   return s;
