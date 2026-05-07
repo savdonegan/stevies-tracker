@@ -104,7 +104,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     --col-repeat: 45px;
     --col-owner: 80px;
     --col-task: 1.7fr;
-    --col-customer: 110px;
+    --col-customer: 80px;
     --col-next: 1.0fr;
     --col-lastbadgered: 100px;
     --col-notes: 1.0fr;
@@ -1950,7 +1950,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   @media (max-width: 1100px) {
     :root {
       --col-status: 85px; --col-importance: 68px; --col-due: 84px; --col-repeat: 42px;
-      --col-owner: 74px; --col-task: 1.5fr; --col-customer: 100px;
+      --col-owner: 74px; --col-task: 1.5fr; --col-customer: 72px;
       --col-next: 0.9fr; --col-notes: 0.9fr; --col-email: 44px; --col-doc: 44px;
       --col-delete: 58px;
     }
@@ -2672,6 +2672,14 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <div class="recur-section recur-section-static">
       <label class="recur-section-label" for="followUpNotes">Notes</label>
       <textarea id="followUpNotes" class="follow-up-textarea" placeholder="Any notes worth remembering" rows="3"></textarea>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="followUpLink">📎 Email link or subject</label>
+      <input type="text" id="followUpLink" class="follow-up-textarea" placeholder="Outlook URL, https://… link, or chain subject">
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="followUpDoc">📄 Doc / SLG link</label>
+      <input type="text" id="followUpDoc" class="follow-up-textarea" placeholder="Doc URL, SLG link, Galaxy URL, etc.">
     </div>
     <div class="recur-actions">
       <button type="button" id="followUpSkipBtn" class="recur-btn-secondary recur-btn-clear">Skip</button>
@@ -5841,6 +5849,10 @@ function openFollowUpModal(taskId, reason) {
   document.getElementById("followUpTaskName").textContent = t.task || "(untitled task)";
   document.getElementById("followUpNext").value = t.next || "";
   document.getElementById("followUpNotes").value = t.notes || "";
+  // Email link prefill — show the URL if it's a URL, or the chain subject if not.
+  // setEmailReference (on save) handles the URL-vs-subject branching the same way.
+  document.getElementById("followUpLink").value = t.outlookLink || t.emailSubject || "";
+  document.getElementById("followUpDoc").value = t.docLink || "";
   document.getElementById("followUpModal").style.display = "flex";
   // Focus the Next Steps textarea on open so the user can start typing
   // immediately. Use a microtask delay so display:flex paints first.
@@ -5865,9 +5877,22 @@ async function saveFollowUpInfo() {
   if (!t) { closeFollowUpModal(); return; }
   const newNext = normalizeText(document.getElementById("followUpNext").value.trim());
   const newNotes = normalizeText(document.getElementById("followUpNotes").value.trim());
+  const newLinkVal = document.getElementById("followUpLink").value.trim();
+  const newDocVal = document.getElementById("followUpDoc").value.trim();
   let changed = false;
   if (t.next !== newNext) { t.next = newNext; changed = true; }
   if (t.notes !== newNotes) { t.notes = newNotes; changed = true; }
+  // Email link uses setEmailReference to do URL-vs-subject branching consistently
+  // with the rest of the app. We compare against current state to detect change.
+  const currentLink = t.outlookLink || t.emailSubject || "";
+  if (currentLink !== newLinkVal) {
+    setEmailReference(t, newLinkVal);
+    changed = true;
+  }
+  if ((t.docLink || "") !== newDocVal) {
+    t.docLink = newDocVal;
+    changed = true;
+  }
   if (changed) {
     stampTaskUpdated(t);
     await persist();
