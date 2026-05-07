@@ -4785,11 +4785,9 @@ function render() {
         return;
       }
       t.status = newStatus;
-      let triggerFollowUp = false;
       if (!wasComplete && newStatus === "Complete") {
         t.completedAt = new Date().toISOString();
         celebrateComplete();
-        triggerFollowUp = true;
         // Recurring tasks no longer auto-spawn the next occurrence on
         // completion — each future occurrence was already created upfront
         // when the task was added (Outlook/Reminders style). Just mark
@@ -4800,7 +4798,6 @@ function render() {
       stampTaskUpdated(t);
       await persist();
       render();
-      if (triggerFollowUp) openFollowUpModal(id, "completed");
     });
     row.querySelector(".due-input").addEventListener("change", e => updateTask(id, "due", e.target.value));
     const badgeredInput = row.querySelector(".last-badgered-input");
@@ -6177,7 +6174,6 @@ function renderNowCard() {
       await persist();
       render();
       renderNowCard();
-      openFollowUpModal(id, "completed");
     });
   });
   body.querySelectorAll("[data-now-unpin]").forEach(b => {
