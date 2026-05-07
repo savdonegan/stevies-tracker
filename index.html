@@ -104,7 +104,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     --col-repeat: 45px;
     --col-owner: 80px;
     --col-task: 1.7fr;
-    --col-customer: 80px;
+    --col-customer: 40px;
     --col-next: 1.0fr;
     --col-lastbadgered: 100px;
     --col-notes: 1.0fr;
@@ -1950,7 +1950,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   @media (max-width: 1100px) {
     :root {
       --col-status: 85px; --col-importance: 68px; --col-due: 84px; --col-repeat: 42px;
-      --col-owner: 74px; --col-task: 1.5fr; --col-customer: 72px;
+      --col-owner: 74px; --col-task: 1.5fr; --col-customer: 36px;
       --col-next: 0.9fr; --col-notes: 0.9fr; --col-email: 44px; --col-doc: 44px;
       --col-delete: 58px;
     }
@@ -6191,7 +6191,11 @@ document.getElementById("newTaskHeader").addEventListener("keydown", e => {
 });
 
 // ---------------- Column resizing & row density ----------------
-const COL_NAMES = ["status","importance","due","repeat","owner","task","customer","next","lastbadgered","notes","email","doc","delete"];
+// Source of truth for column names used by resizing + persisted widths.
+// Order MUST match the order columns appear in the DOM. The Owner column was
+// removed long ago; do not re-add it here. The Repeat column lives in the DOM
+// (hidden via CSS) so it's listed too.
+const COL_NAMES = ["status","importance","due","repeat","task","customer","next","lastbadgered","notes","email","doc","delete"];
 const COL_RESIZE_KEY = "stevies-col-widths";
 const ROW_DENSITY_KEY = "stevies-row-density";
 const COL_DEFAULTS = {
@@ -6230,16 +6234,25 @@ function resetColumnWidths() {
 function attachColumnResizeHandles() {
   const header = document.getElementById("sortHeader");
   if (!header) return;
-  // Map cells to the column names in order. Only attach to non-final columns.
+  // Iterate header cells and use each cell's authoritative `data-col`
+  // attribute to wire its resize handle. Reading data-col (rather than
+  // indexing into COL_NAMES by DOM position) guarantees the handle resizes
+  // the column the user is actually dragging — even if the DOM order or
+  // COL_NAMES list drift apart over time. Skip the very last cell so the
+  // rightmost column doesn't get a handle that has nothing to grow into,
+  // and skip the hidden-via-CSS Repeat cell.
   const cells = Array.from(header.children);
   cells.forEach((cell, idx) => {
-    if (idx >= COL_NAMES.length - 1) return; // skip last (delete) col
-    if (cell.querySelector(".col-resize-handle")) return; // already attached
+    if (idx === cells.length - 1) return;          // skip final column
+    const colName = cell.dataset.col;
+    if (!colName) return;
+    if (colName === "repeat") return;               // hidden column — no handle
+    if (cell.querySelector(".col-resize-handle")) return;
     const handle = document.createElement("div");
     handle.className = "col-resize-handle";
-    handle.dataset.col = COL_NAMES[idx];
+    handle.dataset.col = colName;
     cell.appendChild(handle);
-    handle.addEventListener("mousedown", e => startColResize(e, COL_NAMES[idx], cell));
+    handle.addEventListener("mousedown", e => startColResize(e, colName, cell));
   });
 }
 
