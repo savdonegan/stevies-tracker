@@ -3521,7 +3521,7 @@ async function loadFromFile() {
     if (typeof data.defaultOwner === "string") defaultOwner = data.defaultOwner;
     // Migrate context schema (handles both legacy single-list shape and new bucketed shape)
     migrateContextSchema(data);
-    migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts();
+    migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts(); dedupeRecurringInstances();
     syncContextView();
     return true;
   } catch (err) {
@@ -3611,7 +3611,7 @@ function loadLocal() {
     // byContext data structures. Then sync the live view from the active context.
     migrateContextSchema(data);
   } catch {}
-  migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts();
+  migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts(); dedupeRecurringInstances();
   syncContextView();
 }
 
@@ -4174,7 +4174,7 @@ async function pullFromGist() {
     } else if (remote.customerAliases) {
       mergeColors(customerAliasesByContext.work, remote.customerAliases);
     }
-    migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts();
+    migrateSubtasksToFlat(); cleanupSubtaskBadgeArtifacts(); dedupeRecurringInstances();
     syncContextView();
     saveLocal();
     setLastPulledAt(remoteUpdatedAt);
@@ -6859,8 +6859,19 @@ function buildRecurringInstancesFromRule(seed, rule) {
   if (seed.due !== dates[0]) seed.due = dates[0];
   const groupId = seed.recurGroupId || newId();
   seed.recurGroupId = groupId;
+  // Build a set of (groupId, due) pairs that already exist for this group so
+  // we don't double up if the user re-runs the recurrence picker on a task
+  // that's already part of a series. Also include the seed's new due date.
+  const existingDates = new Set([seed.due]);
+  for (const t of tasks) {
+    if (t.recurGroupId === groupId && t.due && t.id !== seed.id) {
+      existingDates.add(t.due);
+    }
+  }
   const out = [];
   for (let i = 1; i < dates.length; i++) {
+    if (existingDates.has(dates[i])) continue;  // skip duplicates
+    existingDates.add(dates[i]);
     out.push({
       ...seed,
       id: newId(),
@@ -6873,6 +6884,41 @@ function buildRecurringInstancesFromRule(seed, rule) {
     });
   }
   return out;
+}
+
+// One-time cleanup: if a recurrence series accidentally got duplicates (e.g.,
+// from clicking the ↻ button multiple times before the dedupe guard above
+// existed), remove redundant tasks that share the same recurGroupId AND due
+// date. Keep the EARLIEST-created one (most likely the original series), and
+// only delete duplicates that have no user-added content (no notes, no next
+// steps, status still Incomplete) so we never silently nuke real work.
+function dedupeRecurringInstances() {
+  if (!Array.isArray(tasks)) return 0;
+  const groups = new Map();  // key: recurGroupId|due  →  [tasks]
+  for (const t of tasks) {
+    if (!t.recurGroupId || !t.due || t.deletedAt) continue;
+    const key = t.recurGroupId + "|" + t.due;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const removeIds = new Set();
+  for (const list of groups.values()) {
+    if (list.length <= 1) continue;
+    list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    // Keep [0]. For each additional duplicate, only remove if it's a clean
+    // boilerplate copy — any notes / next-steps / completion / lastBadgered
+    // means a human touched it and we leave it alone.
+    for (let i = 1; i < list.length; i++) {
+      const d = list[i];
+      const hasUserContent = d.notes || d.next || d.lastBadgered ||
+                             d.status === "Complete" ||
+                             d.status === "Waiting for response";
+      if (!hasUserContent) removeIds.add(d.id);
+    }
+  }
+  if (removeIds.size === 0) return 0;
+  tasks = tasks.filter(t => !removeIds.has(t.id));
+  return removeIds.size;
 }
 
 // ---- Recurrence picker modal state ----
