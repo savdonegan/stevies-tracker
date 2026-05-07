@@ -944,7 +944,13 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     border: 1px solid var(--border);
     border-top: none;
     border-radius: 0 0 10px 10px;
-    overflow: hidden;
+    /* Allow horizontal scroll INSIDE the task table when columns grow past
+       the viewport (e.g., user dragged Notes / Task description very wide).
+       Without this, body's `overflow-x: hidden` clips the rightmost columns
+       entirely. The mobile @media rules below override this to `visible`
+       because the cards layout never overflows horizontally. */
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .grid-row {
@@ -3796,9 +3802,18 @@ function renderSideLists() {
       // (not a stale closure from before a sync replaced the array).
       const live = listKey === 'shopping' ? shoppingList : groceryList;
       if (!live[idx]) return;
-      ensureSideItemId(live[idx]);
-      live[idx].done = cb.checked;
-      live[idx].updatedAt = Date.now();
+      if (cb.checked) {
+        // Checking off a shopping/grocery item removes it from the list —
+        // once you've grabbed it, it's done, gone. (Different model from
+        // tasks, which stay around in a "Complete" bucket.)
+        live.splice(idx, 1);
+      } else {
+        // Edge case: items get removed on check, so this branch only fires
+        // for legacy data that already has done=true. Restore-to-active.
+        ensureSideItemId(live[idx]);
+        live[idx].done = false;
+        live[idx].updatedAt = Date.now();
+      }
       await persist();
       renderSideLists();
     });
@@ -5840,6 +5855,9 @@ let followUpTaskId = null;
 function openFollowUpModal(taskId, reason) {
   const t = tasks.find(x => x.id === taskId);
   if (!t) return;
+  // Personal-context tasks don't render Next Steps / Notes / Email / Doc
+  // columns at all, so prompting for those fields would be noise. Skip.
+  if ((t.context || "work") === "personal") return;
   followUpTaskId = taskId;
   // Title reflects the action that just happened
   const title = reason === "completed"
