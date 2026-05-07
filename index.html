@@ -273,7 +273,17 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .done-pill .done-line { display: block; white-space: nowrap; }
 
   /* Procrastination flag on task description */
-  .procrastinating { color: #b8731a; margin-right: 4px; }
+  .procrastinating {
+    color: #b8731a;
+    margin-right: 4px;
+    /* Sits as a sibling of the contenteditable .task-text. user-select:none
+       + cursor:default keeps the snail icon from being part of any text
+       selection or drag, and a stable contenteditable="false" guarantees
+       it stays out of innerText when the description is edited. */
+    user-select: none;
+    cursor: default;
+    flex-shrink: 0;
+  }
 
   /* Subtasks drawer */
   .subtasks-row {
@@ -3622,9 +3632,28 @@ function cleanupSubtaskBadgeArtifacts() {
   // range ←-⇿ covers every arrow glyph, so we catch ↑/↳/↓/⤵/etc.
   // regardless of which character the badge happened to render with.
   const trailingBadge = /(\s*[←-⇿]\s*\d+)+\s*$/;
+  // Earlier versions of the row template put the procrastination ⏳ (and now
+  // 🐌) span INSIDE the contenteditable .task-text. When the user edited the
+  // task, innerText included the icon character, so it got persisted into
+  // t.task. On the next render the procrastination span was added in front
+  // of an already-prefixed task text, accumulating ⏳⏳⏳... over time. The
+  // template was fixed to render the icon as a sibling element with
+  // contenteditable=false, but existing tasks may already have leading
+  // ⏳/🐌 + whitespace baked into t.task. Strip them.
+  const leadingProcrastIcon = /^[⏳🐌\s]+/;  // ⏳ + 🐌 surrogate pair + whitespace
   for (const t of tasks) {
-    if (typeof t.task === "string" && trailingBadge.test(t.task)) {
-      t.task = t.task.replace(trailingBadge, "").trim();
+    if (typeof t.task === "string") {
+      if (trailingBadge.test(t.task)) {
+        t.task = t.task.replace(trailingBadge, "").trim();
+      }
+      if (leadingProcrastIcon.test(t.task)) {
+        const cleaned = t.task.replace(leadingProcrastIcon, "").trim();
+        // Only apply if the cleanup actually removed icon chars (don't
+        // accidentally chop a real word that starts with a leading space).
+        if (cleaned !== t.task && cleaned.length > 0) {
+          t.task = cleaned;
+        }
+      }
     }
   }
 }
@@ -5511,7 +5540,8 @@ function taskRowHtml(t, opts2) {
       <div class="task-cell-wrapper" data-col="task">
         <button class="focus-pin-btn ${isNowTask(t.id) ? "is-now" : ""}" data-focus-pin="${t.id}" title="${isNowTask(t.id) ? "Pinned in 'Working on now' — click to unpin" : "Pin in 'Working on now' (you can pin multiple)"}">${isNowTask(t.id) ? "📍" : "📌"}</button>
         <button class="defer-btn ${t.status === "Waiting for response" ? "is-waiting" : ""}" data-defer-task="${t.id}" title="${t.status === "Waiting for response" ? "Update follow-up date" : "Mark as waiting for response and pick a follow-up date"}">⏳</button>
-        <div class="editable task-text" contenteditable="true" data-field="task" data-empty="${!t.task}" data-placeholder="Task...">${isProcrastinating(t) ? `<span class="procrastinating" title="On your list ${daysBetween(new Date(t.createdAt), new Date())} days, or pushed ${t.dueChanges || 0}× — maybe it's time?">⏳</span>` : ""}${escapeHtml(t.task || "")}</div>
+        ${isProcrastinating(t) ? `<span class="procrastinating" contenteditable="false" title="On your list ${daysBetween(new Date(t.createdAt), new Date())} days, or pushed ${t.dueChanges || 0}× — maybe it's time?">🐌</span>` : ""}
+        <div class="editable task-text" contenteditable="true" data-field="task" data-empty="${!t.task}" data-placeholder="Task...">${escapeHtml(t.task || "")}</div>
         ${hiddenSubBadge}
         <button class="add-subtask-hover" data-add-subtask="${t.id}" title="Add subtask">+</button>
       </div>
