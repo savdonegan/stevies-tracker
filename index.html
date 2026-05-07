@@ -2407,6 +2407,30 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .defer-preset:hover { border-color: var(--blue-2); background: var(--bg-soft); }
   .defer-preset:active { transform: scale(0.97); }
 
+  /* Follow-up details modal — task name banner + two textareas */
+  .follow-up-task-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.35;
+    word-wrap: break-word;
+  }
+  .follow-up-textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: white;
+    resize: vertical;
+    min-height: 60px;
+    box-sizing: border-box;
+    margin-top: 4px;
+  }
+  .follow-up-textarea:focus { outline: none; border-color: var(--blue-2); }
+
   /* ---------------- "Working on now" focus card ---------------- */
 
   /* Bright, prominent card pinned above the task list. Visually distinct
@@ -2626,6 +2650,33 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <input type="password" id="autoUnlockPin" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus>
     <button id="autoUnlockGoBtn">Unlock</button>
     <button id="autoUnlockSkipBtn" class="auto-unlock-skip">Skip — work offline</button>
+  </div>
+</div>
+
+<!-- Follow-up details prompt. Fires after a task is deferred (Waiting for
+     response) or completed, asking the user to jot down what's next and
+     any notes while it's fresh. Cancel/Skip leaves the task as-is. -->
+<div id="followUpModal" class="recur-modal" style="display: none;">
+  <div class="recur-modal-card defer-modal-card">
+    <div class="recur-modal-header">
+      <h3 id="followUpTitle">Update follow-up info</h3>
+      <button type="button" class="recur-close" id="followUpCloseBtn" title="Skip">×</button>
+    </div>
+    <div class="recur-section recur-section-static">
+      <div class="follow-up-task-name" id="followUpTaskName"></div>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="followUpNext">Next steps</label>
+      <textarea id="followUpNext" class="follow-up-textarea" placeholder="What's next? (one per line)" rows="3"></textarea>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="followUpNotes">Notes</label>
+      <textarea id="followUpNotes" class="follow-up-textarea" placeholder="Any notes worth remembering" rows="3"></textarea>
+    </div>
+    <div class="recur-actions">
+      <button type="button" id="followUpSkipBtn" class="recur-btn-secondary recur-btn-clear">Skip</button>
+      <button type="button" id="followUpSaveBtn" class="recur-btn-primary">Save</button>
+    </div>
   </div>
 </div>
 
@@ -4682,9 +4733,11 @@ function render() {
         return;
       }
       t.status = newStatus;
+      let triggerFollowUp = false;
       if (!wasComplete && newStatus === "Complete") {
         t.completedAt = new Date().toISOString();
         celebrateComplete();
+        triggerFollowUp = true;
         // Recurring tasks no longer auto-spawn the next occurrence on
         // completion — each future occurrence was already created upfront
         // when the task was added (Outlook/Reminders style). Just mark
@@ -4695,6 +4748,7 @@ function render() {
       stampTaskUpdated(t);
       await persist();
       render();
+      if (triggerFollowUp) openFollowUpModal(id, "completed");
     });
     row.querySelector(".due-input").addEventListener("change", e => updateTask(id, "due", e.target.value));
     const badgeredInput = row.querySelector(".last-badgered-input");
@@ -5725,6 +5779,7 @@ function closeDeferModal() {
 async function applyDeferral(days) {
   const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
   if (!t) { closeDeferModal(); return; }
+  const targetId = t.id;
   t.status = "Waiting for response";
   const target = new Date();
   target.setHours(0, 0, 0, 0);
@@ -5743,12 +5798,14 @@ async function applyDeferral(days) {
   render();
   renderNowCard();
   showToast(`Following up in ${days} day${days === 1 ? "" : "s"} — due ${fmtDate(t.due)}`);
+  openFollowUpModal(targetId, "deferred");
 }
 
 // "Skip — keep current due date" — just set the status without rolling the date.
 async function skipDeferral() {
   const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
   if (!t) { closeDeferModal(); return; }
+  const targetId = t.id;
   t.status = "Waiting for response";
   stampTaskUpdated(t);
   // Auto-unpin from "Working on now" (same reasoning as applyDeferral)
@@ -5761,6 +5818,85 @@ async function skipDeferral() {
   await persist();
   render();
   renderNowCard();
+  openFollowUpModal(targetId, "deferred");
+}
+
+// ---------------- Follow-up details prompt ----------------
+//
+// Fires after a task is deferred or completed, prompting the user to jot
+// down Next Steps and Notes while the context is fresh. Saves to t.next /
+// t.notes on the same task. Skip/Cancel leaves the task as-is.
+
+let followUpTaskId = null;
+
+function openFollowUpModal(taskId, reason) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t) return;
+  followUpTaskId = taskId;
+  // Title reflects the action that just happened
+  const title = reason === "completed"
+    ? "Nice — anything to capture?"
+    : "Following up — what's next?";
+  document.getElementById("followUpTitle").textContent = title;
+  document.getElementById("followUpTaskName").textContent = t.task || "(untitled task)";
+  document.getElementById("followUpNext").value = t.next || "";
+  document.getElementById("followUpNotes").value = t.notes || "";
+  document.getElementById("followUpModal").style.display = "flex";
+  // Focus the Next Steps textarea on open so the user can start typing
+  // immediately. Use a microtask delay so display:flex paints first.
+  setTimeout(() => {
+    const ta = document.getElementById("followUpNext");
+    if (ta) {
+      ta.focus();
+      // Move caret to end so appending feels natural
+      const len = ta.value.length;
+      ta.setSelectionRange(len, len);
+    }
+  }, 30);
+}
+
+function closeFollowUpModal() {
+  followUpTaskId = null;
+  document.getElementById("followUpModal").style.display = "none";
+}
+
+async function saveFollowUpInfo() {
+  const t = followUpTaskId ? tasks.find(x => x.id === followUpTaskId) : null;
+  if (!t) { closeFollowUpModal(); return; }
+  const newNext = normalizeText(document.getElementById("followUpNext").value.trim());
+  const newNotes = normalizeText(document.getElementById("followUpNotes").value.trim());
+  let changed = false;
+  if (t.next !== newNext) { t.next = newNext; changed = true; }
+  if (t.notes !== newNotes) { t.notes = newNotes; changed = true; }
+  if (changed) {
+    stampTaskUpdated(t);
+    await persist();
+    render();
+  }
+  closeFollowUpModal();
+}
+
+function initFollowUpModal() {
+  const close = document.getElementById("followUpCloseBtn");
+  if (close) close.addEventListener("click", closeFollowUpModal);
+  const skip = document.getElementById("followUpSkipBtn");
+  if (skip) skip.addEventListener("click", closeFollowUpModal);
+  const save = document.getElementById("followUpSaveBtn");
+  if (save) save.addEventListener("click", saveFollowUpInfo);
+  const modal = document.getElementById("followUpModal");
+  if (modal) modal.addEventListener("click", e => {
+    if (e.target === modal) closeFollowUpModal();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && modal && modal.style.display === "flex") {
+      closeFollowUpModal();
+    }
+    // Cmd/Ctrl+Enter inside the modal saves
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && modal && modal.style.display === "flex") {
+      e.preventDefault();
+      saveFollowUpInfo();
+    }
+  });
 }
 
 function initDeferModal() {
@@ -5958,6 +6094,7 @@ function renderNowCard() {
       if (!t) { unpinNowTask(id); return; }
       t.status = "Complete";
       t.completedAt = new Date().toISOString();
+      stampTaskUpdated(t);
       celebrateComplete();
       // Auto-unpin on completion (the renderNowCard filter would do this anyway,
       // but doing it explicitly keeps the saved state tidy).
@@ -5967,6 +6104,7 @@ function renderNowCard() {
       await persist();
       render();
       renderNowCard();
+      openFollowUpModal(id, "completed");
     });
   });
   body.querySelectorAll("[data-now-unpin]").forEach(b => {
@@ -6010,6 +6148,9 @@ initNowCard();
 
 // Wire up the deferral picker (opens when a task moves to "Waiting for response")
 initDeferModal();
+
+// Wire up the follow-up details prompt (opens after defer or complete)
+initFollowUpModal();
 
 // "+ New Task" header is a toggle: click to expand/collapse the form. Default
 // state is collapsed (just the header). Form auto-collapses after a successful
