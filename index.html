@@ -2452,20 +2452,20 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   }
   .bulk-bar-btn-danger:hover { background: #fce8e8; border-color: #d96b6b; }
 
-  /* Per-row bulk-select checkbox — visible only in bulk-mode. Inserted as
-     the first child of the .task-cell-wrapper so it sits to the left of the
-     focus pin. */
+  /* Per-row bulk-select checkbox — always visible on every task row. Lives
+     as the first child of .task-cell-wrapper so it sits to the left of the
+     focus pin + defer button + task title. Check any boxes and the bulk
+     action bar appears automatically above the task list. */
   .bulk-select-cb {
-    display: none;
+    display: inline-block;
     width: 16px;
     height: 16px;
-    margin-right: 2px;
+    margin-right: 4px;
     cursor: pointer;
     flex-shrink: 0;
   }
-  body.bulk-mode .bulk-select-cb { display: inline-block; }
-  /* Highlight selected rows so they're easy to scan */
-  body.bulk-mode .task-row.bulk-selected {
+  /* Highlight selected rows so they're easy to scan when several are picked */
+  .task-row.bulk-selected {
     background: #e6f7ea !important;
     box-shadow: inset 3px 0 0 var(--blue-1);
   }
@@ -3077,7 +3077,6 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <label class="toggle-pill"><input type="checkbox" id="showArchived" title="Tasks completed > 30 days ago"> Include archived</label>
     <label class="toggle-pill"><input type="checkbox" id="showSubtasks" title="Expand subtask drawers under every task"> Show subtasks</label>
     <label class="toggle-pill" style="background: #fff3f3; border-color: #f4d27a;"><input type="checkbox" id="showDeleted" title="View tasks you deleted (recoverable)"> 🗑 Deleted</label>
-    <label class="toggle-pill" id="bulkModeToggleLabel"><input type="checkbox" id="bulkModeToggle" title="Show selection checkboxes for bulk editing"> ☑ Bulk edit</label>
   </div>
 
   <!-- Bulk-edit action bar — sits between the search row and the task table.
@@ -6121,24 +6120,12 @@ function initDeferModal() {
 
 // ---------------- Bulk select & bulk edit ----------------
 //
-// Toggle bulk mode via the "☑ Bulk edit" pill in the search row. While on,
-// every task row shows a checkbox. The bulk-action bar appears once at
-// least one task is selected and lets you change Status / Importance /
-// Customer / Due, clear Due, or soft-delete every selected task in one
-// shot.
+// Every task row shows a checkbox on its left side at all times. Tick any
+// of them and a bulk-action bar appears above the task list, letting you
+// change Status / Importance / Customer / Due, clear Due, or soft-delete
+// every selected task in one shot.
 
-let bulkMode = false;
 let bulkSelectedIds = new Set();
-
-function setBulkMode(on) {
-  bulkMode = !!on;
-  document.body.classList.toggle("bulk-mode", bulkMode);
-  if (!bulkMode) bulkSelectedIds.clear();
-  const toggle = document.getElementById("bulkModeToggle");
-  if (toggle) toggle.checked = bulkMode;
-  renderBulkBar();
-  render();
-}
 
 function clearBulkSelection() {
   bulkSelectedIds.clear();
@@ -6161,7 +6148,7 @@ function toggleBulkSelect(id, checked) {
 function renderBulkBar() {
   const bar = document.getElementById("bulkBar");
   if (!bar) return;
-  bar.hidden = !bulkMode || bulkSelectedIds.size === 0;
+  bar.hidden = bulkSelectedIds.size === 0;
   if (bar.hidden) return;
   document.getElementById("bulkBarCount").textContent =
     `${bulkSelectedIds.size} selected`;
@@ -6197,9 +6184,6 @@ async function applyBulkUpdate(mutator, opts = {}) {
 }
 
 function initBulkBar() {
-  const toggle = document.getElementById("bulkModeToggle");
-  if (toggle) toggle.addEventListener("change", e => setBulkMode(e.target.checked));
-
   document.getElementById("bulkStatus").addEventListener("change", async e => {
     const v = e.target.value;
     if (!v) return;
