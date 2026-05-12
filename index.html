@@ -2753,6 +2753,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       <div class="follow-up-task-name" id="followUpTaskName"></div>
     </div>
     <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="followUpLastBadgered">📅 Last badgered</label>
+      <input type="date" id="followUpLastBadgered" class="follow-up-textarea" title="When did you last nudge someone about this?">
+    </div>
+    <div class="recur-section recur-section-static">
       <label class="recur-section-label" for="followUpNext">Next steps</label>
       <textarea id="followUpNext" class="follow-up-textarea" placeholder="What's next? (one per line)" rows="3"></textarea>
     </div>
@@ -6048,6 +6052,13 @@ function openFollowUpModal(taskId, reason) {
     : "Following up — what's next?";
   document.getElementById("followUpTitle").textContent = title;
   document.getElementById("followUpTaskName").textContent = t.task || "(untitled task)";
+  // Default the Last Badgered field to today — the most common case when the
+  // user is filling this out is "I just nudged someone, now waiting on them."
+  // If the task already has a more recent badger date saved (e.g., from a
+  // bulk edit), keep that instead.
+  const todayStr = ymd(new Date());
+  document.getElementById("followUpLastBadgered").value =
+    (t.lastBadgered && t.lastBadgered > todayStr) ? t.lastBadgered : todayStr;
   document.getElementById("followUpNext").value = t.next || "";
   document.getElementById("followUpNotes").value = t.notes || "";
   // Email link prefill — show the URL if it's a URL, or the chain subject if not.
@@ -6080,7 +6091,12 @@ async function saveFollowUpInfo() {
   const newNotes = normalizeText(document.getElementById("followUpNotes").value.trim());
   const newLinkVal = document.getElementById("followUpLink").value.trim();
   const newDocVal = document.getElementById("followUpDoc").value.trim();
+  const newBadgered = document.getElementById("followUpLastBadgered").value;
   let changed = false;
+  if ((t.lastBadgered || "") !== (newBadgered || "")) {
+    t.lastBadgered = newBadgered || "";
+    changed = true;
+  }
   if (t.next !== newNext) { t.next = newNext; changed = true; }
   if (t.notes !== newNotes) { t.notes = newNotes; changed = true; }
   // Email link uses setEmailReference to do URL-vs-subject branching consistently
