@@ -3102,7 +3102,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <select class="bulk-bar-input" id="bulkCustomer">
       <option value="">Customer / tag…</option>
     </select>
-    <input type="date" class="bulk-bar-input" id="bulkDue" title="Set due date for all selected">
+    <input type="date" class="bulk-bar-input" id="bulkDue" title="Pick a due date, then click Apply">
+    <button type="button" class="bulk-bar-btn" id="bulkDueApply" title="Apply this due date to all selected">Apply</button>
     <button type="button" class="bulk-bar-btn" id="bulkDueClear" title="Clear due date on all selected">Clear due</button>
     <button type="button" class="bulk-bar-btn bulk-bar-btn-danger" id="bulkDelete" title="Soft-delete all selected">🗑 Delete</button>
     <button type="button" class="bulk-bar-btn" id="bulkClearSelection" title="Unselect all">×</button>
@@ -6218,17 +6219,33 @@ function initBulkBar() {
     e.target.value = "";
   });
 
-  document.getElementById("bulkDue").addEventListener("change", async e => {
-    const v = e.target.value;
-    if (!v) return;
+  // Apply the date currently sitting in the bulk Due picker to every selected
+  // task. Used by both the explicit "Apply" button AND the date input's
+  // change event so it works whether the user picks via the calendar UI
+  // (change fires immediately) or types the date by keyboard (change fires
+  // only on blur — Apply gives them a deterministic commit).
+  async function commitBulkDue() {
+    const input = document.getElementById("bulkDue");
+    const v = (input.value || "").trim();
+    if (!v) {
+      showToast("Pick a date first");
+      return;
+    }
+    if (bulkSelectedIds.size === 0) {
+      showToast("Select some tasks first");
+      return;
+    }
     await applyBulkUpdate(t => {
-      if (t.due && v && v > t.due) t.dueChanges = (t.dueChanges || 0) + 1;
+      if (t.due && v > t.due) t.dueChanges = (t.dueChanges || 0) + 1;
       t.due = v;
     }, { toast: `Due → ${fmtDate(v)}` });
-    e.target.value = "";
-  });
+    input.value = "";
+  }
+  document.getElementById("bulkDue").addEventListener("change", commitBulkDue);
+  document.getElementById("bulkDueApply").addEventListener("click", commitBulkDue);
 
   document.getElementById("bulkDueClear").addEventListener("click", async () => {
+    if (bulkSelectedIds.size === 0) { showToast("Select some tasks first"); return; }
     await applyBulkUpdate(t => { t.due = ""; }, { toast: "Due dates cleared" });
   });
 
