@@ -2399,6 +2399,77 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
      action, separate from the OK/Cancel cluster on the right. */
   .recur-btn-clear { margin-right: auto; }
 
+  /* ---------------- Bulk-edit toolbar ---------------- */
+
+  .bulk-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #e8f5f7 0%, #d6eef2 100%);
+    border: 1px solid var(--blue-2);
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(42, 121, 134, 0.12);
+  }
+  .bulk-bar-count {
+    font-weight: 700;
+    color: var(--blue-1);
+    font-size: 13px;
+    padding-right: 8px;
+    border-right: 1px solid var(--border-strong);
+    margin-right: 4px;
+  }
+  .bulk-bar-input {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    background: white;
+    color: var(--text);
+    height: 30px;
+  }
+  .bulk-bar-input:focus { outline: none; border-color: var(--blue-1); }
+  .bulk-bar-btn {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    background: white;
+    color: var(--text);
+    cursor: pointer;
+    height: 30px;
+  }
+  .bulk-bar-btn:hover { background: var(--bg-soft); border-color: var(--blue-2); }
+  .bulk-bar-btn-danger {
+    background: #fff3f3;
+    border-color: #f4a8a8;
+    color: #a82929;
+  }
+  .bulk-bar-btn-danger:hover { background: #fce8e8; border-color: #d96b6b; }
+
+  /* Per-row bulk-select checkbox — visible only in bulk-mode. Inserted as
+     the first child of the .task-cell-wrapper so it sits to the left of the
+     focus pin. */
+  .bulk-select-cb {
+    display: none;
+    width: 16px;
+    height: 16px;
+    margin-right: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  body.bulk-mode .bulk-select-cb { display: inline-block; }
+  /* Highlight selected rows so they're easy to scan */
+  body.bulk-mode .task-row.bulk-selected {
+    background: #e6f7ea !important;
+    box-shadow: inset 3px 0 0 var(--blue-1);
+  }
+
   /* Defer modal: a slimmer version of the recurrence picker, tuned for
      "how many days until I follow up?" */
   .defer-modal-card { max-width: 380px; }
@@ -3006,6 +3077,36 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <label class="toggle-pill"><input type="checkbox" id="showArchived" title="Tasks completed > 30 days ago"> Include archived</label>
     <label class="toggle-pill"><input type="checkbox" id="showSubtasks" title="Expand subtask drawers under every task"> Show subtasks</label>
     <label class="toggle-pill" style="background: #fff3f3; border-color: #f4d27a;"><input type="checkbox" id="showDeleted" title="View tasks you deleted (recoverable)"> 🗑 Deleted</label>
+    <label class="toggle-pill" id="bulkModeToggleLabel"><input type="checkbox" id="bulkModeToggle" title="Show selection checkboxes for bulk editing"> ☑ Bulk edit</label>
+  </div>
+
+  <!-- Bulk-edit action bar — sits between the search row and the task table.
+       Visible only when bulk mode is on AND at least one task is selected.
+       Applies the chosen value to every selected task in one shot. -->
+  <div class="bulk-bar" id="bulkBar" hidden>
+    <span class="bulk-bar-count" id="bulkBarCount">0 selected</span>
+    <select class="bulk-bar-input" id="bulkStatus">
+      <option value="">Status…</option>
+      <option value="Incomplete">→ Incomplete</option>
+      <option value="Waiting for response">→ Waiting for response</option>
+      <option value="Complete">→ Complete</option>
+    </select>
+    <select class="bulk-bar-input" id="bulkImportance">
+      <option value="">Importance…</option>
+      <option value="0">→ —</option>
+      <option value="1">→ 1 (highest)</option>
+      <option value="2">→ 2</option>
+      <option value="3">→ 3</option>
+      <option value="4">→ 4</option>
+      <option value="5">→ 5 (lowest)</option>
+    </select>
+    <select class="bulk-bar-input" id="bulkCustomer">
+      <option value="">Customer / tag…</option>
+    </select>
+    <input type="date" class="bulk-bar-input" id="bulkDue" title="Set due date for all selected">
+    <button type="button" class="bulk-bar-btn" id="bulkDueClear" title="Clear due date on all selected">Clear due</button>
+    <button type="button" class="bulk-bar-btn bulk-bar-btn-danger" id="bulkDelete" title="Soft-delete all selected">🗑 Delete</button>
+    <button type="button" class="bulk-bar-btn" id="bulkClearSelection" title="Unselect all">×</button>
   </div>
 
   <div class="colors-panel" id="colorsPanel" hidden>
@@ -3895,7 +3996,13 @@ function initSideListInputs() {
 async function persist() {
   saveLocal();
   await saveToFile();
-  await saveToCloud();
+  // saveToCloud (→ pushToGist) is already internally debounced so multiple
+  // rapid persist() calls coalesce into a single network push. We delib-
+  // erately do NOT await it here — making it fire-and-forget keeps the UI
+  // responsive during rapid edits like marking a task waiting-for-response
+  // or applying bulk edits. Cloud sync still completes in the background,
+  // and the saved-pill in the header reflects its state.
+  saveToCloud();
 }
 
 // ---------------- GitHub Gist cloud sync ----------------
@@ -4895,6 +5002,15 @@ function render() {
     });
   });
 
+  // Per-row bulk-select checkbox
+  list.querySelectorAll(".bulk-select-cb").forEach(cb => {
+    cb.addEventListener("change", e => {
+      e.stopPropagation();
+      toggleBulkSelect(cb.dataset.bulkId, cb.checked);
+    });
+    cb.addEventListener("click", e => e.stopPropagation());
+  });
+
   // Per-row ⏳ defer button — opens the deferral picker so the user can mark
   // the task as "Waiting for response" and roll the due date forward to a
   // follow-up date in one shot.
@@ -4974,6 +5090,7 @@ function render() {
   renderSidebar();
   renderSideLists();
   renderNowCard();
+  renderBulkBar();
 }
 
 // ---------------- Outlook integration ----------------
@@ -5501,7 +5618,7 @@ function taskRowHtml(t, opts2) {
     }
   }
   return `
-    <div class="grid-row task-row ${subtaskClass} ${mobileExpClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass} ${isNowTask(t.id) ? "is-now-task" : ""}" data-id="${t.id}">
+    <div class="grid-row task-row ${subtaskClass} ${mobileExpClass} ${t.status === "Complete" ? "complete" : ""} ${overdueClass} ${resortedClass} ${isNowTask(t.id) ? "is-now-task" : ""} ${bulkSelectedIds.has(t.id) ? "bulk-selected" : ""}" data-id="${t.id}">
       <div class="status-cell" data-col="status">
         <select class="status-select ${statusClass}" title="${escapeHtml(t.status || "Incomplete")}">
           <option ${t.status === "Incomplete" ? "selected" : ""}>Incomplete</option>
@@ -5535,6 +5652,7 @@ function taskRowHtml(t, opts2) {
         </select>
       </div>
       <div class="task-cell-wrapper" data-col="task">
+        <input type="checkbox" class="bulk-select-cb" data-bulk-id="${t.id}" ${bulkSelectedIds.has(t.id) ? "checked" : ""} title="Bulk select">
         <button class="focus-pin-btn ${isNowTask(t.id) ? "is-now" : ""}" data-focus-pin="${t.id}" title="${isNowTask(t.id) ? "Pinned in 'Working on now' — click to unpin" : "Pin in 'Working on now' (you can pin multiple)"}">${isNowTask(t.id) ? "📍" : "📌"}</button>
         <button class="defer-btn ${t.status === "Waiting for response" ? "is-waiting" : ""}" data-defer-task="${t.id}" title="${t.status === "Waiting for response" ? "Update follow-up date" : "Mark as waiting for response and pick a follow-up date"}">⏳</button>
         ${isProcrastinating(t) ? `<span class="procrastinating" contenteditable="false" title="On your list ${daysBetween(new Date(t.createdAt), new Date())} days, or pushed ${t.dueChanges || 0}× — maybe it's time?">🐌</span>` : ""}
@@ -6001,6 +6119,145 @@ function initDeferModal() {
   });
 }
 
+// ---------------- Bulk select & bulk edit ----------------
+//
+// Toggle bulk mode via the "☑ Bulk edit" pill in the search row. While on,
+// every task row shows a checkbox. The bulk-action bar appears once at
+// least one task is selected and lets you change Status / Importance /
+// Customer / Due, clear Due, or soft-delete every selected task in one
+// shot.
+
+let bulkMode = false;
+let bulkSelectedIds = new Set();
+
+function setBulkMode(on) {
+  bulkMode = !!on;
+  document.body.classList.toggle("bulk-mode", bulkMode);
+  if (!bulkMode) bulkSelectedIds.clear();
+  const toggle = document.getElementById("bulkModeToggle");
+  if (toggle) toggle.checked = bulkMode;
+  renderBulkBar();
+  render();
+}
+
+function clearBulkSelection() {
+  bulkSelectedIds.clear();
+  renderBulkBar();
+  render();
+}
+
+function toggleBulkSelect(id, checked) {
+  if (checked) bulkSelectedIds.add(id);
+  else bulkSelectedIds.delete(id);
+  renderBulkBar();
+  // Light-touch update — just toggle the row's selection class without a
+  // full re-render so checking 20 boxes doesn't repaint the world 20 times.
+  const row = document.querySelector(`.task-row[data-id="${id}"]`);
+  if (row) row.classList.toggle("bulk-selected", checked);
+}
+
+// Show/hide the bulk-action bar based on current selection, and refresh the
+// "N selected" label + customer dropdown.
+function renderBulkBar() {
+  const bar = document.getElementById("bulkBar");
+  if (!bar) return;
+  bar.hidden = !bulkMode || bulkSelectedIds.size === 0;
+  if (bar.hidden) return;
+  document.getElementById("bulkBarCount").textContent =
+    `${bulkSelectedIds.size} selected`;
+  // Refresh the customer dropdown options to match the current context
+  const sel = document.getElementById("bulkCustomer");
+  const cur = sel.value;
+  const isPersonal = currentContext === "personal";
+  const placeholder = isPersonal ? "Tag…" : "Customer / area…";
+  sel.innerHTML =
+    `<option value="">${placeholder}</option>` +
+    `<option value="__none__">→ (none)</option>` +
+    customers.map(c => `<option value="${escapeHtml(c)}">→ ${escapeHtml(c)}</option>`).join("");
+  sel.value = cur;
+}
+
+// Apply a bulk update closure to every selected task. The closure receives
+// the task and mutates it in place. After the loop we persist + re-render
+// + clear the selection so the user sees the result immediately.
+async function applyBulkUpdate(mutator, opts = {}) {
+  if (bulkSelectedIds.size === 0) return;
+  const ids = Array.from(bulkSelectedIds);
+  for (const id of ids) {
+    const t = tasks.find(x => x.id === id);
+    if (!t) continue;
+    mutator(t);
+    stampTaskUpdated(t);
+  }
+  await persist();
+  if (opts.keepSelection !== true) bulkSelectedIds.clear();
+  render();
+  renderBulkBar();
+  if (opts.toast) showToast(opts.toast);
+}
+
+function initBulkBar() {
+  const toggle = document.getElementById("bulkModeToggle");
+  if (toggle) toggle.addEventListener("change", e => setBulkMode(e.target.checked));
+
+  document.getElementById("bulkStatus").addEventListener("change", async e => {
+    const v = e.target.value;
+    if (!v) return;
+    await applyBulkUpdate(t => {
+      const wasComplete = t.status === "Complete";
+      t.status = v;
+      if (v === "Complete" && !wasComplete) {
+        t.completedAt = new Date().toISOString();
+      } else if (v !== "Complete" && wasComplete) {
+        t.completedAt = null;
+      }
+    }, { toast: `Status set on ${e.target.selectedOptions[0].text.replace(/^→ /, "")}` });
+    e.target.value = "";
+  });
+
+  document.getElementById("bulkImportance").addEventListener("change", async e => {
+    const v = e.target.value;
+    if (v === "") return;
+    const num = Number(v) || 0;
+    await applyBulkUpdate(t => { t.importance = num; },
+      { toast: num ? `Importance → ${num}` : "Importance cleared" });
+    e.target.value = "";
+  });
+
+  document.getElementById("bulkCustomer").addEventListener("change", async e => {
+    const raw = e.target.value;
+    if (!raw) return;
+    const value = raw === "__none__" ? "" : raw;
+    const label = currentContext === "personal" ? "Tag" : "Customer";
+    await applyBulkUpdate(t => { t.customer = value; },
+      { toast: value ? `${label} → ${value}` : `${label} cleared` });
+    e.target.value = "";
+  });
+
+  document.getElementById("bulkDue").addEventListener("change", async e => {
+    const v = e.target.value;
+    if (!v) return;
+    await applyBulkUpdate(t => {
+      if (t.due && v && v > t.due) t.dueChanges = (t.dueChanges || 0) + 1;
+      t.due = v;
+    }, { toast: `Due → ${fmtDate(v)}` });
+    e.target.value = "";
+  });
+
+  document.getElementById("bulkDueClear").addEventListener("click", async () => {
+    await applyBulkUpdate(t => { t.due = ""; }, { toast: "Due dates cleared" });
+  });
+
+  document.getElementById("bulkDelete").addEventListener("click", async () => {
+    if (!confirm(`Delete ${bulkSelectedIds.size} task${bulkSelectedIds.size === 1 ? "" : "s"}? (Soft-delete — recoverable from the 🗑 Deleted view)`)) return;
+    await applyBulkUpdate(t => {
+      t.deletedAt = new Date().toISOString();
+    }, { toast: "Deleted" });
+  });
+
+  document.getElementById("bulkClearSelection").addEventListener("click", clearBulkSelection);
+}
+
 // ---------------- "Working on now" focus card ----------------
 //
 // ADHD-friendly multi-task focus indicator. Pin one or several tasks as "now";
@@ -6220,6 +6477,9 @@ initDeferModal();
 
 // Wire up the follow-up details prompt (opens after defer or complete)
 initFollowUpModal();
+
+// Wire up bulk select + bulk edit toolbar
+initBulkBar();
 
 // "+ New Task" header is a toggle: click to expand/collapse the form. Default
 // state is collapsed (just the header). Form auto-collapses after a successful
