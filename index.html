@@ -4746,7 +4746,7 @@ function render() {
       `<span class="done-line">🌸 ${pToday} today · ${pWeek} wk · ${pAll} all-time</span>`;
   }
   const dp = document.getElementById("donePill");
-  if (dp) dp.title = "Tasks completed — Work (top) and Personal (bottom)";
+  if (dp) dp.title = "Actions taken — completed OR moved to Waiting for response. Work (top), Personal (bottom).";
 
   // Apply chosen sort
   visible.sort((a, b) => compareTasks(a, b, sortField, sortDir));
@@ -5971,7 +5971,17 @@ async function applyDeferral(days) {
   const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
   if (!t) { closeDeferModal(); return; }
   const targetId = t.id;
+  const wasAlreadyWaiting = t.status === "Waiting for response";
   t.status = "Waiting for response";
+  // Stamp the moment we moved to Waiting so today/this-week action counters
+  // credit it. Only stamp on the transition into Waiting — re-deferring an
+  // already-waiting task shouldn't reset its credit timestamp.
+  if (!wasAlreadyWaiting) {
+    t.waitingAt = new Date().toISOString();
+    // Same celebration treatment as completion — you took action, you get
+    // pandora confetti.
+    celebrateComplete();
+  }
   const target = new Date();
   target.setHours(0, 0, 0, 0);
   target.setDate(target.getDate() + Math.max(1, days));
@@ -5997,7 +6007,12 @@ async function skipDeferral() {
   const t = deferTargetTaskId ? tasks.find(x => x.id === deferTargetTaskId) : null;
   if (!t) { closeDeferModal(); return; }
   const targetId = t.id;
+  const wasAlreadyWaiting = t.status === "Waiting for response";
   t.status = "Waiting for response";
+  if (!wasAlreadyWaiting) {
+    t.waitingAt = new Date().toISOString();
+    celebrateComplete();
+  }
   stampTaskUpdated(t);
   // Auto-unpin from "Working on now" (same reasoning as applyDeferral)
   const pinIdx = nowTaskIds.indexOf(t.id);
@@ -6213,11 +6228,17 @@ function initBulkBar() {
     if (!v) return;
     await applyBulkUpdate(t => {
       const wasComplete = t.status === "Complete";
+      const wasWaiting = t.status === "Waiting for response";
       t.status = v;
       if (v === "Complete" && !wasComplete) {
         t.completedAt = new Date().toISOString();
       } else if (v !== "Complete" && wasComplete) {
         t.completedAt = null;
+      }
+      // Stamp waitingAt on transition INTO Waiting so the daily/weekly action
+      // counter credits bulk-moved tasks the same way single edits do.
+      if (v === "Waiting for response" && !wasWaiting) {
+        t.waitingAt = new Date().toISOString();
       }
     }, { toast: `Status set on ${e.target.selectedOptions[0].text.replace(/^→ /, "")}` });
     e.target.value = "";
@@ -6865,16 +6886,26 @@ function daysBetween(d1, d2) {
   return Math.round((b - a) / 86400000);
 }
 
-// Was this task completed today (in local time)?
+// Was this task "actioned" today — either Completed today OR moved to
+// "Waiting for response" today? Both count as taking action on the task,
+// so both feed the Done counter pill in the header. We use whichever
+// timestamp matches the current status so a task that was Completed
+// yesterday and reopened today doesn't double-count.
 function wasCompletedToday(t) {
-  if (!t.completedAt) return false;
-  const c = new Date(t.completedAt);
+  const ts = t.status === "Complete" ? t.completedAt
+           : t.status === "Waiting for response" ? t.waitingAt
+           : null;
+  if (!ts) return false;
+  const c = new Date(ts);
   const today = new Date();
   return c.toDateString() === today.toDateString();
 }
 function wasCompletedThisWeek(t) {
-  if (!t.completedAt) return false;
-  const c = new Date(t.completedAt);
+  const ts = t.status === "Complete" ? t.completedAt
+           : t.status === "Waiting for response" ? t.waitingAt
+           : null;
+  if (!ts) return false;
+  const c = new Date(ts);
   const today = new Date(); today.setHours(0,0,0,0);
   const monday = startOfWeek(today);
   return c >= monday;
