@@ -5880,6 +5880,29 @@ async function updateTask(id, field, value) {
   }
   t[field] = value;
   stampTaskUpdated(t);
+  // Series-wide fields: changes to customer or task description on any one
+  // occurrence of a recurring series propagate to every other task in the
+  // same recurGroupId. These fields describe "what this task is" rather
+  // than per-occurrence state (status / due / notes / next / lastBadgered
+  // / completedAt all stay scoped to the single occurrence).
+  const seriesWideFields = ["customer", "task"];
+  if (t.recurGroupId && seriesWideFields.includes(field)) {
+    let propagated = 0;
+    for (const other of tasks) {
+      if (other.id === t.id) continue;
+      if (other.recurGroupId !== t.recurGroupId) continue;
+      if (other[field] === value) continue;
+      other[field] = value;
+      stampTaskUpdated(other);
+      propagated++;
+    }
+    if (propagated > 0) {
+      const label = field === "customer"
+        ? (currentContext === "personal" ? "Tag" : "Customer")
+        : "Task";
+      showToast(`${label} updated on ${propagated} other occurrence${propagated === 1 ? "" : "s"} in the series`);
+    }
+  }
   await persist();
   // Re-render after structural changes AND after text-field edits — so the user
   // sees normalizeText's capitalization/typo fixes immediately after blur,
