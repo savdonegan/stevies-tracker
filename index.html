@@ -7232,18 +7232,79 @@ function openRecurModal(taskId) {
   document.getElementById("recurModal").style.display = "flex";
 }
 
-// Apply a rule to an existing task: spawn future occurrences as independent
-// tasks. The seed task itself stays put — its due date is left alone unless
-// the rule's first generated date doesn't match (in which case the seed's
-// due date is rolled forward to the first matching date).
+// Apply a rule to an existing task: prune incompatible future occurrences
+// in the series, then spawn new ones to match the new rule. The seed task
+// itself stays put — its due date is left alone unless the rule's first
+// generated date doesn't match (in which case the seed's due date is
+// rolled forward to the first matching date).
+//
+// Pruning is conservative: only future, "clean" occurrences (no notes,
+// no next steps, no completion, no waiting-for-response, no badgered
+// date, no email or doc link) are removed. Anything you've touched is
+// preserved even if it doesn't match the new rule, so you never lose work.
 async function applyRuleToExistingTask(taskId, rule) {
   const t = tasks.find(x => x.id === taskId);
   if (!t || !rule || rule.freq === "none") return 0;
   if (!t.due) t.due = ymd(new Date());
+
+  // Step 1 — compute the new rule's date set (so we can identify which
+  // existing occurrences no longer fit). Seed at the task's due date.
+  const newDates = new Set(expandRecurRule(rule, t.due));
+
+  // Step 2 — find sibling tasks in the same recurGroupId and prune any
+  // clean ones that aren't on a date the new rule covers. Anything in the
+  // past, anything user-touched, and the seed itself are kept.
+  let removed = 0;
+  let keptDirty = 0;
+  if (t.recurGroupId) {
+    const today = ymd(new Date());
+    const cleanToRemove = new Set();
+    for (const other of tasks) {
+      if (other.id === t.id) continue;
+      if (other.recurGroupId !== t.recurGroupId) continue;
+      // Don't touch past occurrences (anything before today)
+      if (!other.due || other.due < today) continue;
+      // If this date is part of the new rule, keep it
+      if (newDates.has(other.due)) continue;
+      // Otherwise: only remove if the occurrence is "clean" — no user content
+      const isClean =
+        (other.status === "Incomplete" || !other.status) &&
+        !other.completedAt &&
+        !other.notes &&
+        !other.next &&
+        !other.lastBadgered &&
+        !other.outlookLink &&
+        !other.emailSubject &&
+        !other.docLink;
+      if (isClean) {
+        cleanToRemove.add(other.id);
+        removed++;
+      } else {
+        keptDirty++;
+      }
+    }
+    if (cleanToRemove.size > 0) {
+      tasks = tasks.filter(x => !cleanToRemove.has(x.id));
+    }
+  }
+
+  // Step 3 — spawn new occurrences. buildRecurringInstancesFromRule already
+  // skips dates that already exist in the series, so this just fills in the
+  // gaps with new-rule occurrences without duplicating ones that survived
+  // the prune above.
   const instances = buildRecurringInstancesFromRule(t, rule);
   for (const inst of instances) tasks.push(inst);
   await persist();
   render();
+
+  // Friendly summary so the user knows what happened
+  if (removed > 0 || keptDirty > 0) {
+    const parts = [];
+    if (instances.length) parts.push(`added ${instances.length}`);
+    if (removed > 0) parts.push(`removed ${removed} unused`);
+    if (keptDirty > 0) parts.push(`kept ${keptDirty} with notes/work`);
+    showToast(parts.join(", "));
+  }
   return instances.length;
 }
 
