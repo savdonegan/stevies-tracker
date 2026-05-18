@@ -272,18 +272,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .done-pill .check { font-size: 11px; align-self: flex-start; padding-top: 2px; }
   .done-pill .done-line { display: block; white-space: nowrap; }
 
-  /* Procrastination flag on task description */
-  .procrastinating {
-    color: #b8731a;
-    margin-right: 4px;
-    /* Sits as a sibling of the contenteditable .task-text. user-select:none
-       + cursor:default keeps the snail icon from being part of any text
-       selection or drag, and a stable contenteditable="false" guarantees
-       it stays out of innerText when the description is edited. */
-    user-select: none;
-    cursor: default;
-    flex-shrink: 0;
-  }
+  /* Procrastination feature removed per user request. CSS class kept as a
+     no-op so any legacy markup that might still emit it (e.g., a synced
+     row from a stale device) renders invisibly instead of breaking. */
+  .procrastinating { display: none; }
 
   /* Subtasks drawer */
   .subtasks-row {
@@ -5659,7 +5651,7 @@ function taskRowHtml(t, opts2) {
         <input type="checkbox" class="bulk-select-cb" data-bulk-id="${t.id}" ${bulkSelectedIds.has(t.id) ? "checked" : ""} title="Bulk select">
         <button class="focus-pin-btn ${isNowTask(t.id) ? "is-now" : ""}" data-focus-pin="${t.id}" title="${isNowTask(t.id) ? "Pinned in 'Working on now' — click to unpin" : "Pin in 'Working on now' (you can pin multiple)"}">${isNowTask(t.id) ? "📍" : "📌"}</button>
         <button class="defer-btn ${t.status === "Waiting for response" ? "is-waiting" : ""}" data-defer-task="${t.id}" title="${t.status === "Waiting for response" ? "Update follow-up date" : "Mark as waiting for response and pick a follow-up date"}">⏳</button>
-        ${isProcrastinating(t) ? `<span class="procrastinating" contenteditable="false" title="On your list ${daysBetween(new Date(t.createdAt), new Date())} days, or pushed ${t.dueChanges || 0}× — maybe it's time?">🐌</span>` : ""}
+        ${""/* procrastination tag feature removed per user request */}
         <div class="editable task-text" contenteditable="true" data-field="task" data-empty="${!t.task}" data-placeholder="Task...">${escapeHtml(t.task || "")}</div>
         ${hiddenSubBadge}
         <button class="add-subtask-hover" data-add-subtask="${t.id}" title="Add subtask">+</button>
@@ -6927,15 +6919,11 @@ function wasCompletedThisWeek(t) {
   return c >= monday;
 }
 
-// Procrastination: incomplete + (older than 14 days) OR (due-date pushed forward >= 3 times).
-// "Waiting for response" tasks are NOT flagged — they're blocked on someone else, not on you.
-function isProcrastinating(t) {
-  if (t.status === "Complete") return false;
-  if (t.status === "Waiting for response") return false;
-  if (Number(t.dueChanges) >= 3) return true;
-  if (t.createdAt && daysBetween(new Date(t.createdAt), new Date()) >= 14) return true;
-  return false;
-}
+// Procrastination feature removed per user request. The function is kept
+// as a stub returning false so any lingering callsites that haven't been
+// scrubbed won't blow up. dueChanges and the leading-icon cleanup in
+// cleanupSubtaskBadgeArtifacts are still useful and stay put.
+function isProcrastinating(_t) { return false; }
 
 // Should this completed task be considered archived (older than 30 days)?
 function isArchived(t) {
