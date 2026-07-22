@@ -2779,18 +2779,41 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     gap: 8px;
   }
   .card-task-item:last-child { border-bottom: none; }
-  .card-task-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    margin-top: 4px;
-  }
   .card-task-body { flex: 1; min-width: 0; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
   .card-task-body:hover { background: var(--bg-soft); }
   .card-task-name { font-weight: 500; word-break: break-word; }
   .card-task-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .card-task-item.complete .card-task-name { text-decoration: line-through; opacity: 0.6; }
   .card-empty-msg { padding: 14px 16px; font-size: 13px; color: var(--text-muted); font-style: italic; text-align: center; }
+  .card-priority-badge {
+    flex-shrink: 0;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 1px;
+  }
+  .card-priority-1 { background: #d54b4b; color: white; }
+  .card-priority-2 { background: #e97f2a; color: white; }
+  .card-priority-3 { background: #e6b800; color: #3a1000; }
+  .card-priority-4 { background: #7bb87e; color: white; }
+  .card-priority-5 { background: #c0d8e8; color: #3a1000; }
+  .card-priority-none { background: transparent; color: transparent; }
+  .card-show-more-btn {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    background: var(--bg-soft);
+    border: none;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    text-align: center;
+    font-family: inherit;
+  }
+  .card-show-more-btn:hover { background: var(--border); color: var(--text); }
 </style>
 </head>
 <body>
@@ -3428,6 +3451,11 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 
   <!-- CARD VIEW — rendered by setTrackerView('cards') -->
   <div id="cardView">
+    <div style="display:flex;align-items:center;gap:14px;padding:8px 2px 12px;font-size:13px;color:var(--text-muted);">
+      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="cardShowCompleted" style="cursor:pointer;"> Show completed tasks
+      </label>
+    </div>
     <div class="card-grid" id="cardGrid"></div>
   </div>
 
@@ -5233,6 +5261,7 @@ function render() {
   renderSideLists();
   renderNowCard();
   renderBulkBar();
+  if (typeof _trackerView !== "undefined" && _trackerView === "cards") renderCards();
 }
 
 // ---------------- Outlook integration ----------------
@@ -8665,6 +8694,11 @@ document.querySelectorAll(".context-tab").forEach(btn => {
   document.getElementById("viewListBtn").classList.add("active");
 })();
 
+// Wire the card-view "show completed" checkbox
+document.getElementById("cardShowCompleted")?.addEventListener("change", () => {
+  if (_trackerView === "cards") renderCards();
+});
+
 // ---- Card view toggle ----
 let _trackerView = "list";
 
@@ -8693,10 +8727,12 @@ function renderCards() {
   const grid = document.getElementById("cardGrid");
   if (!grid) return;
 
-  // Apply same filters as list view
+  const CARD_LIMIT = 8;
+
+  // Use the card-view-specific "show completed" checkbox (defaults to unchecked)
+  const showCompleted = (document.getElementById("cardShowCompleted") || {}).checked === true;
   const fStatus = (document.getElementById("filterStatus") || {}).value || "";
   const fOwner = ((document.getElementById("filterOwner") || {}).value || "").trim().toLowerCase();
-  const showCompleted = (document.getElementById("showCompleted") || {}).checked === true;
   const searchQ = searchQuery || "";
 
   const visible = tasks.filter(t => {
@@ -8720,41 +8756,58 @@ function renderCards() {
     groups[key].push(t);
   });
 
+  function makeTaskItem(t) {
+    const imp = t.importance || 0;
+    const impBadge = imp > 0
+      ? `<span class="card-priority-badge card-priority-${imp}">${imp}</span>`
+      : `<span class="card-priority-badge card-priority-none">—</span>`;
+    const meta = [
+      t.due ? fmtDate(t.due) : "",
+      t.owner ? escapeHtml(t.owner) : ""
+    ].filter(Boolean).join(" · ");
+    const isChecked = bulkSelectedIds.has(t.id) ? "checked" : "";
+    return `<div class="card-task-item${t.status === "Complete" ? " complete" : ""}">
+      <input type="checkbox" class="card-bulk-cb" data-bulk-id="${t.id}" ${isChecked} title="Bulk select" style="flex-shrink:0;margin:0 4px 0 0;cursor:pointer;">
+      ${impBadge}
+      <div class="card-task-body" style="cursor:pointer;" onclick="openCardTaskModal('${t.id}')">
+        <div class="card-task-name">${escapeHtml(t.task || "—")}</div>
+        ${meta ? `<div class="card-task-meta">${meta}</div>` : ""}
+      </div>
+    </div>`;
+  }
+
   // Render cards
   const html = Object.entries(groups).map(([cust, ctasks]) => {
+    if (!ctasks.length) return "";
     const cls = customerColorClass(cust === "Unassigned" ? "" : cust);
     const customBg = customerColors[cust];
     const headerStyle = customBg
       ? `background:${customBg}; color:${autoTextColor(customBg)};`
       : "";
     const incomplete = ctasks.filter(t => t.status !== "Complete").length;
-    const sorted = [...ctasks].sort((a, b) => (a.due || "9999") < (b.due || "9999") ? -1 : 1);
+    const sorted = [...ctasks].sort((a, b) => {
+      const ia = a.importance || 99, ib = b.importance || 99;
+      if (ia !== ib) return ia - ib;
+      return (a.due || "9999") < (b.due || "9999") ? -1 : 1;
+    });
+    const isExpanded = _expandedCards.has(cust);
+    const shown = isExpanded ? sorted : sorted.slice(0, CARD_LIMIT);
+    const hidden = sorted.length - shown.length;
 
-    const items = sorted.length
-      ? sorted.map(t => {
-          const dot = t.status === "Complete" ? "background:var(--green)" : "background:var(--blue-2)";
-          const meta = [
-            t.due ? fmtDate(t.due) : "",
-            t.owner ? "Owner: " + escapeHtml(t.owner) : ""
-          ].filter(Boolean).join(" · ");
-          const isChecked = bulkSelectedIds.has(t.id) ? "checked" : "";
-          return `<div class="card-task-item${t.status === "Complete" ? " complete" : ""}">
-            <input type="checkbox" class="card-bulk-cb" data-bulk-id="${t.id}" ${isChecked} title="Bulk select" style="flex-shrink:0;margin:0 4px 0 0;cursor:pointer;">
-            <div class="card-task-dot" style="${dot}"></div>
-            <div class="card-task-body" style="cursor:pointer;" onclick="openCardTaskModal('${t.id}')">
-              <div class="card-task-name">${escapeHtml(t.task || "—")}</div>
-              ${meta ? `<div class="card-task-meta">${meta}</div>` : ""}
-            </div>
-          </div>`;
-        }).join("")
-      : `<div class="card-empty-msg">No tasks</div>`;
+    const itemsHtml = shown.map(makeTaskItem).join("");
+    const showMoreBtn = hidden > 0
+      ? `<button class="card-show-more-btn" data-card-cust="${escapeHtml(cust)}">Show ${hidden} more ▾</button>`
+      : (isExpanded && sorted.length > CARD_LIMIT
+          ? `<button class="card-show-more-btn" data-card-cust="${escapeHtml(cust)}">Show less ▴</button>`
+          : "");
 
     return `<div class="customer-card">
       <div class="customer-card-header ${headerStyle ? "" : cls}" style="${headerStyle}">
         <span>${escapeHtml(cust)}</span>
         <span class="customer-card-badge">${incomplete} open · ${ctasks.length} total</span>
       </div>
-      ${items}
+      ${itemsHtml || `<div class="card-empty-msg">No tasks</div>`}
+      ${showMoreBtn}
     </div>`;
   }).join("");
 
@@ -8764,10 +8817,21 @@ function renderCards() {
   grid.querySelectorAll(".card-bulk-cb").forEach(cb => {
     cb.addEventListener("change", () => toggleBulkSelect(cb.dataset.bulkId, cb.checked));
   });
+
+  // Wire show-more buttons
+  grid.querySelectorAll(".card-show-more-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const cust = btn.dataset.cardCust;
+      if (_expandedCards.has(cust)) _expandedCards.delete(cust);
+      else _expandedCards.add(cust);
+      renderCards();
+    });
+  });
 }
 
 // ---- Card task edit modal ----
 let _cardEditId = null;
+const _expandedCards = new Set();
 
 function openCardTaskModal(id) {
   const t = tasks.find(x => x.id === id);
