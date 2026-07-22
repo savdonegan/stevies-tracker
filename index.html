@@ -2762,10 +2762,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   #listViewContent.hidden { display: none; }
 
   .card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 18px;
-    align-items: start;
+    columns: 320px;
+    column-gap: 18px;
   }
   .customer-card {
     background: white;
@@ -2773,6 +2771,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(200,70,20,0.07);
+    break-inside: avoid;
+    margin-bottom: 18px;
   }
   .customer-card-header {
     padding: 12px 16px;
