@@ -2843,6 +2843,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .card-show-more-btn:hover { background: var(--border); color: var(--text); }
   .card-drag-handle { cursor: grab; opacity: 0.35; font-size: 16px; margin-right: 6px; user-select: none; }
   .card-drag-handle:hover { opacity: 0.7; }
+  .card-drag-handle:active { cursor: grabbing; }
   .customer-card[draggable="true"] { cursor: default; }
   .customer-card.drag-over { outline: 2px dashed var(--blue-2); outline-offset: 2px; }
 </style>
@@ -8864,7 +8865,7 @@ function renderCards() {
           ? `<button class="card-show-more-btn" data-card-cust="${escapeHtml(cust)}">Show less ▴</button>`
           : "");
 
-    return `<div class="customer-card" draggable="true" data-drag-cust="${escapeHtml(cust)}">
+    return `<div class="customer-card" draggable="false" data-drag-cust="${escapeHtml(cust)}">
       <div class="customer-card-header ${headerStyle ? "" : cls}" style="${headerStyle}">
         <span class="card-drag-handle" title="Drag to reorder">⠿</span>
         <span style="flex:1;">${escapeHtml(cust)}</span>
@@ -8882,34 +8883,60 @@ function renderCards() {
     cb.addEventListener("change", () => toggleBulkSelect(cb.dataset.bulkId, cb.checked));
   });
 
-  // Drag-and-drop card reordering
+  // Drag-and-drop card reordering.
+  // The card is draggable="false" by default so its content (task rows,
+  // action buttons, text selection) stays fully interactive. Dragging is
+  // armed only while the mouse is held on the ⠿ handle.
   let _dragSrc = null;
-  grid.querySelectorAll(".customer-card[draggable]").forEach(card => {
+  const clearDragOver = () =>
+    grid.querySelectorAll(".customer-card.drag-over").forEach(c => c.classList.remove("drag-over"));
+  grid.querySelectorAll(".customer-card").forEach(card => {
+    const handle = card.querySelector(".card-drag-handle");
+    if (handle) {
+      handle.addEventListener("mousedown", () => { card.draggable = true; });
+      handle.addEventListener("mouseup", () => { card.draggable = false; });
+    }
     card.addEventListener("dragstart", e => {
       _dragSrc = card.dataset.dragCust;
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", _dragSrc);
       setTimeout(() => card.style.opacity = "0.5", 0);
     });
-    card.addEventListener("dragend", () => { card.style.opacity = ""; });
+    card.addEventListener("dragend", () => {
+      card.style.opacity = "";
+      card.draggable = false;
+      clearDragOver();
+      _dragSrc = null;
+    });
     card.addEventListener("dragover", e => {
+      if (!_dragSrc) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      card.classList.add("drag-over");
+      // Don't highlight the card being dragged.
+      if (card.dataset.dragCust !== _dragSrc) card.classList.add("drag-over");
     });
-    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("dragleave", e => {
+      // dragleave also fires when moving onto a child element; only clear the
+      // highlight when the pointer truly leaves this card.
+      if (!card.contains(e.relatedTarget)) card.classList.remove("drag-over");
+    });
     card.addEventListener("drop", e => {
       e.preventDefault();
-      card.classList.remove("drag-over");
+      clearDragOver();
       const dropTarget = card.dataset.dragCust;
       if (!_dragSrc || _dragSrc === dropTarget) return;
-      // Build new order from visible cards, then swap
       const allCusts = orderedCusts.slice();
       const fromIdx = allCusts.indexOf(_dragSrc);
       const toIdx = allCusts.indexOf(dropTarget);
       if (fromIdx === -1 || toIdx === -1) return;
+      // Remove the source first, THEN find the target's (possibly shifted)
+      // index so we never insert at a stale position. Dragging forward drops
+      // after the target; dragging backward drops before it — which matches
+      // where the card visually appears to land.
       allCusts.splice(fromIdx, 1);
-      allCusts.splice(toIdx, 0, _dragSrc);
+      let insertIdx = allCusts.indexOf(dropTarget);
+      if (fromIdx < toIdx) insertIdx += 1;
+      allCusts.splice(insertIdx, 0, _dragSrc);
       _cardOrder = allCusts;
       saveCardOrder();
       renderCards();
