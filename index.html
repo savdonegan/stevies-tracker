@@ -2413,6 +2413,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(42, 121, 134, 0.12);
   }
+  .bulk-bar[hidden] { display: none !important; }
   .bulk-bar-count {
     font-weight: 700;
     color: var(--blue-1);
@@ -2785,6 +2786,16 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .card-task-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .card-task-item.complete .card-task-name { text-decoration: line-through; opacity: 0.6; }
   .card-empty-msg { padding: 14px 16px; font-size: 13px; color: var(--text-muted); font-style: italic; text-align: center; }
+  .card-task-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.35; transition: opacity 0.12s; }
+  .card-task-item:hover .card-task-actions { opacity: 1; }
+  .card-action-complete, .card-action-delete {
+    background: none; border: none; cursor: pointer; padding: 2px 5px;
+    border-radius: 4px; font-size: 14px; line-height: 1;
+  }
+  .card-action-complete { color: var(--green); }
+  .card-action-complete:hover { background: #e8f8ed; }
+  .card-action-delete { color: var(--red); }
+  .card-action-delete:hover { background: #fce8e8; }
   .card-priority-badge {
     flex-shrink: 0;
     width: 20px; height: 20px;
@@ -2814,6 +2825,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     font-family: inherit;
   }
   .card-show-more-btn:hover { background: var(--border); color: var(--text); }
+  .card-drag-handle { cursor: grab; opacity: 0.35; font-size: 16px; margin-right: 6px; user-select: none; }
+  .card-drag-handle:hover { opacity: 0.7; }
+  .customer-card[draggable="true"] { cursor: default; }
+  .customer-card.drag-over { outline: 2px dashed var(--blue-2); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -2826,6 +2841,9 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <div class="auto-unlock-title">Welcome back</div>
     <div class="auto-unlock-sub">Enter your PIN to sync</div>
     <input type="password" id="autoUnlockPin" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus>
+    <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:#888;cursor:pointer;margin-top:4px;">
+      <input type="checkbox" id="autoUnlockRemember"> Remember on this device
+    </label>
     <button id="autoUnlockGoBtn">Unlock</button>
     <button id="autoUnlockSkipBtn" class="auto-unlock-skip">Skip — work offline</button>
   </div>
@@ -3351,6 +3369,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       <button id="gistSetupBtn" style="background:var(--blue-1);color:white;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;">Set up GitHub Gist sync</button>
       <button id="gistPullBtn" style="display:none;background:white;border:1px solid var(--border-strong);color:var(--blue-1);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;">↻ Pull from gist</button>
       <button id="gistResetBtn" style="display:none;background:none;border:1px solid var(--border-strong);color:var(--red);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit;">Disconnect & forget token</button>
+      <button id="forgetDeviceBtn" style="display:none;background:none;border:1px solid var(--border-strong);color:var(--text-muted);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit;" title="Remove saved PIN from this device — you'll need to enter it again on next load">Forget this device</button>
     </div>
 
     <h4 style="margin-top: 16px;">Backup &amp; Sync</h4>
@@ -4195,6 +4214,7 @@ async function persist() {
 const GIST_CONFIG_KEY = "stevies-tracker-gist-config";
 const GIST_LAST_PULL_KEY = "stevies-tracker-gist-last-pull";
 const GIST_FILENAME = "tracker-data.json";
+const SAVED_PIN_KEY = "stevies-tracker-saved-pin";
 let gistToken = "";       // in-memory only — populated via PIN unlock
 let gistId = "";          // copied from config on unlock; not credential, just an identifier
 let gistSyncing = false;
@@ -4257,23 +4277,22 @@ async function unlockGist(pin, opts) {
     gistToken = await window._crypto.decrypt(pin, cfg.encryptedToken);
     gistId = cfg.gistId;
     // Auto-migrate legacy high-iteration blobs to the new 80k iteration count.
-    // This is a one-shot per device — first unlock is slow (legacy 250k),
-    // we re-encrypt at 80k, every subsequent unlock is ~3× faster.
     const currentIt = cfg.encryptedToken.it || 250000;
     if (currentIt > 100000) {
       try {
         const newEnc = await window._crypto.encrypt(pin, gistToken);
         setGistConfig({ encryptedToken: newEnc, gistId: gistId });
-        console.log("[gist] migrated encrypted token from", currentIt, "to 80k iterations");
       } catch (e) { console.warn("[gist] re-encrypt for migration failed:", e); }
+    }
+    // Save PIN to localStorage if "remember" checkbox is checked
+    if (opts.remember || (document.getElementById("autoUnlockRemember") || {}).checked) {
+      try { localStorage.setItem(SAVED_PIN_KEY, pin); } catch {}
     }
     hideUnlockOverlay();
     updateGistUI();
     await pullFromGist();
     return true;
   } catch (err) {
-    // Silent failures during auto-attempts (typing in progress) — only show
-    // the "Wrong PIN" toast for explicit button clicks.
     if (!opts.silent) showToast("Wrong PIN");
     return false;
   }
@@ -4558,9 +4577,16 @@ async function initGistSync() {
     updateGistUI();
     return;
   }
-  // Encrypted config present — auto-pop the unlock overlay so the user can
-  // PIN-in without navigating to Settings.
   updateGistUI();
+  // Try saved PIN for silent auto-unlock
+  try {
+    const savedPin = localStorage.getItem(SAVED_PIN_KEY);
+    if (savedPin) {
+      const ok = await unlockGist(savedPin, { silent: true });
+      if (ok) return; // unlocked silently — no overlay needed
+    }
+  } catch {}
+  // Saved PIN missing or wrong — show overlay
   showUnlockOverlay();
 }
 
@@ -4583,17 +4609,22 @@ function updateGistUI() {
   if (!status) return; // UI not in DOM yet
   if (unlockBlock) unlockBlock.style.display = "none";
 
+  const forgetBtn = document.getElementById("forgetDeviceBtn");
+  const hasSavedPin = !!localStorage.getItem(SAVED_PIN_KEY);
+
   if (connected) {
     status.innerHTML = `✓ Connected to gist <code style="font-size:11px;">${escapeHtml(gistId.slice(0,12))}…</code>${gistSyncing ? " · syncing…" : ""}`;
     if (setupBlock) setupBlock.style.display = "none";
     if (setupBtn) setupBtn.style.display = "none";
     if (pullBtn) pullBtn.style.display = "inline-block";
     if (resetBtn) resetBtn.style.display = "inline-block";
+    if (forgetBtn) forgetBtn.style.display = hasSavedPin ? "inline-block" : "none";
   } else {
     status.textContent = "Not connected. Tasks save locally only.";
     if (setupBtn) setupBtn.style.display = "inline-block";
     if (pullBtn) pullBtn.style.display = "none";
     if (resetBtn) resetBtn.style.display = "none";
+    if (forgetBtn) forgetBtn.style.display = "none";
   }
 
   // Saved-pill: honest about state.
@@ -6890,6 +6921,11 @@ document.getElementById("headerSyncBtn").addEventListener("click", () => {
   pullFromGist();
 });
 document.getElementById("gistResetBtn").addEventListener("click", clearGistConfig);
+document.getElementById("forgetDeviceBtn").addEventListener("click", () => {
+  localStorage.removeItem(SAVED_PIN_KEY);
+  document.getElementById("forgetDeviceBtn").style.display = "none";
+  showToast("Saved PIN removed — you'll enter it next time");
+});
 // Auto-unlock overlay handlers
 document.getElementById("autoUnlockGoBtn").addEventListener("click", async () => {
   const pin = document.getElementById("autoUnlockPin").value;
@@ -8760,24 +8796,31 @@ function renderCards() {
     const imp = t.importance || 0;
     const impBadge = imp > 0
       ? `<span class="card-priority-badge card-priority-${imp}">${imp}</span>`
-      : `<span class="card-priority-badge card-priority-none">—</span>`;
+      : `<span class="card-priority-badge card-priority-none"></span>`;
     const meta = [
       t.due ? fmtDate(t.due) : "",
       t.owner ? escapeHtml(t.owner) : ""
     ].filter(Boolean).join(" · ");
     const isChecked = bulkSelectedIds.has(t.id) ? "checked" : "";
-    return `<div class="card-task-item${t.status === "Complete" ? " complete" : ""}">
+    const isDone = t.status === "Complete";
+    return `<div class="card-task-item${isDone ? " complete" : ""}">
       <input type="checkbox" class="card-bulk-cb" data-bulk-id="${t.id}" ${isChecked} title="Bulk select" style="flex-shrink:0;margin:0 4px 0 0;cursor:pointer;">
       ${impBadge}
       <div class="card-task-body" style="cursor:pointer;" onclick="openCardTaskModal('${t.id}')">
         <div class="card-task-name">${escapeHtml(t.task || "—")}</div>
         ${meta ? `<div class="card-task-meta">${meta}</div>` : ""}
       </div>
+      <div class="card-task-actions">
+        <button class="card-action-complete" data-card-id="${t.id}" title="${isDone ? "Mark incomplete" : "Mark complete"}">${isDone ? "↩" : "✓"}</button>
+        <button class="card-action-delete" data-card-id="${t.id}" title="Delete">×</button>
+      </div>
     </div>`;
   }
 
-  // Render cards
-  const html = Object.entries(groups).map(([cust, ctasks]) => {
+  // Render cards in saved drag order
+  const orderedCusts = getOrderedCustomers(Object.keys(groups));
+  const html = orderedCusts.map(cust => {
+    const ctasks = groups[cust] || [];
     if (!ctasks.length) return "";
     const cls = customerColorClass(cust === "Unassigned" ? "" : cust);
     const customBg = customerColors[cust];
@@ -8786,9 +8829,10 @@ function renderCards() {
       : "";
     const incomplete = ctasks.filter(t => t.status !== "Complete").length;
     const sorted = [...ctasks].sort((a, b) => {
+      const da = a.due || "9999", db = b.due || "9999";
+      if (da !== db) return da < db ? -1 : 1;
       const ia = a.importance || 99, ib = b.importance || 99;
-      if (ia !== ib) return ia - ib;
-      return (a.due || "9999") < (b.due || "9999") ? -1 : 1;
+      return ia - ib;
     });
     const isExpanded = _expandedCards.has(cust);
     const shown = isExpanded ? sorted : sorted.slice(0, CARD_LIMIT);
@@ -8801,9 +8845,10 @@ function renderCards() {
           ? `<button class="card-show-more-btn" data-card-cust="${escapeHtml(cust)}">Show less ▴</button>`
           : "");
 
-    return `<div class="customer-card">
+    return `<div class="customer-card" draggable="true" data-drag-cust="${escapeHtml(cust)}">
       <div class="customer-card-header ${headerStyle ? "" : cls}" style="${headerStyle}">
-        <span>${escapeHtml(cust)}</span>
+        <span class="card-drag-handle" title="Drag to reorder">⠿</span>
+        <span style="flex:1;">${escapeHtml(cust)}</span>
         <span class="customer-card-badge">${incomplete} open · ${ctasks.length} total</span>
       </div>
       ${itemsHtml || `<div class="card-empty-msg">No tasks</div>`}
@@ -8818,6 +8863,40 @@ function renderCards() {
     cb.addEventListener("change", () => toggleBulkSelect(cb.dataset.bulkId, cb.checked));
   });
 
+  // Drag-and-drop card reordering
+  let _dragSrc = null;
+  grid.querySelectorAll(".customer-card[draggable]").forEach(card => {
+    card.addEventListener("dragstart", e => {
+      _dragSrc = card.dataset.dragCust;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", _dragSrc);
+      setTimeout(() => card.style.opacity = "0.5", 0);
+    });
+    card.addEventListener("dragend", () => { card.style.opacity = ""; });
+    card.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", e => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      const dropTarget = card.dataset.dragCust;
+      if (!_dragSrc || _dragSrc === dropTarget) return;
+      // Build new order from visible cards, then swap
+      const allCusts = orderedCusts.slice();
+      const fromIdx = allCusts.indexOf(_dragSrc);
+      const toIdx = allCusts.indexOf(dropTarget);
+      if (fromIdx === -1 || toIdx === -1) return;
+      allCusts.splice(fromIdx, 1);
+      allCusts.splice(toIdx, 0, _dragSrc);
+      _cardOrder = allCusts;
+      saveCardOrder();
+      renderCards();
+    });
+  });
+
   // Wire show-more buttons
   grid.querySelectorAll(".card-show-more-btn").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -8827,11 +8906,54 @@ function renderCards() {
       renderCards();
     });
   });
+
+  grid.querySelectorAll(".card-action-complete").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const t = tasks.find(x => x.id === btn.dataset.cardId);
+      if (!t) return;
+      const wasComplete = t.status === "Complete";
+      t.status = wasComplete ? "Incomplete" : "Complete";
+      if (!wasComplete) t.completedAt = new Date().toISOString();
+      stampTaskUpdated(t);
+      await persist();
+      render();
+    });
+  });
+
+  grid.querySelectorAll(".card-action-delete").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const t = tasks.find(x => x.id === btn.dataset.cardId);
+      if (!t) return;
+      t.deleted = true;
+      t.deletedAt = new Date().toISOString();
+      stampTaskUpdated(t);
+      await persist();
+      render();
+    });
+  });
 }
 
 // ---- Card task edit modal ----
 let _cardEditId = null;
 const _expandedCards = new Set();
+
+// ---- Card order (drag-and-drop) ----
+const CARD_ORDER_KEY = "stevies-card-order";
+let _cardOrder = [];
+
+function loadCardOrder() {
+  try { _cardOrder = JSON.parse(localStorage.getItem(CARD_ORDER_KEY) || "[]"); } catch { _cardOrder = []; }
+}
+function saveCardOrder() {
+  try { localStorage.setItem(CARD_ORDER_KEY, JSON.stringify(_cardOrder)); } catch {}
+}
+function getOrderedCustomers(custNames) {
+  // Return customers in _cardOrder order, appending any not yet in the order
+  const inOrder = _cardOrder.filter(c => custNames.includes(c));
+  const notInOrder = custNames.filter(c => !_cardOrder.includes(c));
+  return [...inOrder, ...notInOrder];
+}
+loadCardOrder();
 
 function openCardTaskModal(id) {
   const t = tasks.find(x => x.id === id);
