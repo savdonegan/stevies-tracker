@@ -521,7 +521,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   .auto-unlock-sub {
     font-size: 13px; color: var(--text-muted); margin-bottom: 18px;
   }
-  .auto-unlock-card input {
+  .auto-unlock-card input[type="password"] {
     width: 100%;
     padding: 14px 16px;
     font-size: 18px;
@@ -530,12 +530,27 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     border: 1.5px solid var(--border-strong);
     border-radius: 10px;
     font-family: monospace;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
-  .auto-unlock-card input:focus {
+  .auto-unlock-card input[type="password"]:focus {
     outline: none;
     border-color: var(--blue-1);
     box-shadow: 0 0 0 3px rgba(42, 121, 134, 0.15);
+  }
+  .auto-unlock-remember {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  .auto-unlock-remember input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
   }
   .auto-unlock-card button {
     width: 100%;
@@ -2750,6 +2765,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 18px;
+    align-items: start;
   }
   .customer-card {
     background: white;
@@ -2841,7 +2857,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     <div class="auto-unlock-title">Welcome back</div>
     <div class="auto-unlock-sub">Enter your PIN to sync</div>
     <input type="password" id="autoUnlockPin" inputmode="numeric" placeholder="PIN" autocomplete="off" autofocus>
-    <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:#888;cursor:pointer;margin-top:4px;">
+    <label class="auto-unlock-remember">
       <input type="checkbox" id="autoUnlockRemember"> Remember on this device
     </label>
     <button id="autoUnlockGoBtn">Unlock</button>
@@ -8773,6 +8789,7 @@ function renderCards() {
 
   const visible = tasks.filter(t => {
     if (t.deleted) return false;
+    if ((t.context || "work") !== currentContext) return false;
     if (!showCompleted && t.status === "Complete") return false;
     if (fStatus && t.status !== fStatus) return false;
     if (fOwner && !(t.owner || "").toLowerCase().includes(fOwner)) return false;
@@ -8803,7 +8820,8 @@ function renderCards() {
     ].filter(Boolean).join(" · ");
     const isChecked = bulkSelectedIds.has(t.id) ? "checked" : "";
     const isDone = t.status === "Complete";
-    return `<div class="card-task-item${isDone ? " complete" : ""}">
+    const isPinned = isNowTask(t.id);
+    return `<div class="card-task-item${isDone ? " complete" : ""}${isPinned ? " is-now-task" : ""}">
       <input type="checkbox" class="card-bulk-cb" data-bulk-id="${t.id}" ${isChecked} title="Bulk select" style="flex-shrink:0;margin:0 4px 0 0;cursor:pointer;">
       ${impBadge}
       <div class="card-task-body" style="cursor:pointer;" onclick="openCardTaskModal('${t.id}')">
@@ -8811,6 +8829,7 @@ function renderCards() {
         ${meta ? `<div class="card-task-meta">${meta}</div>` : ""}
       </div>
       <div class="card-task-actions">
+        <button class="card-action-pin" data-card-id="${t.id}" title="${isPinned ? "Unpin from Working on now" : "Pin to Working on now"}">${isPinned ? "📍" : "📌"}</button>
         <button class="card-action-complete" data-card-id="${t.id}" title="${isDone ? "Mark incomplete" : "Mark complete"}">${isDone ? "↩" : "✓"}</button>
         <button class="card-action-delete" data-card-id="${t.id}" title="Delete">×</button>
       </div>
@@ -8905,6 +8924,10 @@ function renderCards() {
       else _expandedCards.add(cust);
       renderCards();
     });
+  });
+
+  grid.querySelectorAll(".card-action-pin").forEach(btn => {
+    btn.addEventListener("click", () => setNowTask(btn.dataset.cardId));
   });
 
   grid.querySelectorAll(".card-action-complete").forEach(btn => {
