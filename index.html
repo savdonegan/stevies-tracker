@@ -2785,7 +2785,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     flex-shrink: 0;
     margin-top: 4px;
   }
-  .card-task-body { flex: 1; min-width: 0; }
+  .card-task-body { flex: 1; min-width: 0; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; }
+  .card-task-body:hover { background: var(--bg-soft); }
   .card-task-name { font-weight: 500; word-break: break-word; }
   .card-task-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
   .card-task-item.complete .card-task-name { text-decoration: line-through; opacity: 0.6; }
@@ -3071,6 +3072,69 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 </header>
 
 <div class="toast" id="toast"></div>
+
+<!-- Task edit modal — opened from card view -->
+<div id="cardTaskModal" class="recur-modal" style="display:none;" onclick="if(event.target===this)closeCardTaskModal()">
+  <div class="recur-modal-card" style="max-width:480px;">
+    <div class="recur-modal-header">
+      <h3>Edit Task</h3>
+      <button type="button" class="recur-close" onclick="closeCardTaskModal()" title="Close">×</button>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="ctmTask">Task</label>
+      <input type="text" id="ctmTask" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+    </div>
+    <div class="recur-section recur-section-static" style="display:flex;gap:10px;">
+      <div style="flex:1;">
+        <label class="recur-section-label" for="ctmStatus">Status</label>
+        <select id="ctmStatus" style="width:100%;padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+          <option>Incomplete</option>
+          <option>Waiting for response</option>
+          <option>Complete</option>
+        </select>
+      </div>
+      <div style="flex:0 0 90px;">
+        <label class="recur-section-label" for="ctmImportance">Priority</label>
+        <select id="ctmImportance" style="width:100%;padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+          <option value="0">—</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
+      </div>
+    </div>
+    <div class="recur-section recur-section-static" style="display:flex;gap:10px;">
+      <div style="flex:1;">
+        <label class="recur-section-label" for="ctmDue">Due date</label>
+        <input type="date" id="ctmDue" style="width:100%;padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+      </div>
+      <div style="flex:1;">
+        <label class="recur-section-label" for="ctmCustomer">Customer / Area</label>
+        <select id="ctmCustomer" style="width:100%;padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+          <option value="">— none —</option>
+        </select>
+      </div>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="ctmOwner">Owner</label>
+      <input type="text" id="ctmOwner" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;">
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="ctmNext">Next steps</label>
+      <textarea id="ctmNext" rows="3" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;resize:vertical;font-family:inherit;"></textarea>
+    </div>
+    <div class="recur-section recur-section-static">
+      <label class="recur-section-label" for="ctmNotes">Notes</label>
+      <textarea id="ctmNotes" rows="3" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;resize:vertical;font-family:inherit;"></textarea>
+    </div>
+    <div class="recur-actions">
+      <button type="button" class="recur-btn-secondary recur-btn-clear" onclick="closeCardTaskModal()">Cancel</button>
+      <button type="button" class="recur-btn-primary" onclick="saveCardTaskModal()">Save</button>
+    </div>
+  </div>
+</div>
 
 <div class="container">
 
@@ -5485,6 +5549,7 @@ function renderCustomerColors() {
           <input type="text" class="alias-input" data-customer="${escapeHtml(name)}" placeholder="aliases (comma-separated, e.g., myc3, mychart cc)" value="${escapeHtml(aliases)}">
           <input type="color" data-customer="${escapeHtml(name)}" value="${current}">
           <button class="reset-btn" data-customer="${escapeHtml(name)}" ${isCustom ? "" : "disabled style='opacity:0.4'"}>Reset</button>
+          <button class="delete-customer-btn" data-customer="${escapeHtml(name)}" title="Delete this customer/area" style="background:none;border:1px solid #e88;color:#c44;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:12px;flex-shrink:0;">🗑</button>
         </div>
       `;
     }).join("");
@@ -5503,6 +5568,24 @@ function renderCustomerColors() {
         await persist();
         render();
         renderCustomerColors();
+      });
+    });
+    list.querySelectorAll(".delete-customer-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const name = btn.dataset.customer;
+        if (!confirm(`Delete "${name}"? Tasks assigned to this customer will be unassigned.`)) return;
+        const ix = customers.indexOf(name);
+        if (ix >= 0) customers.splice(ix, 1);
+        delete customerColors[name];
+        delete customerAliases[name];
+        for (const t of tasks) {
+          if (t.customer === name) t.customer = "";
+        }
+        populateCustomerDropdowns();
+        await persist();
+        render();
+        renderCustomerColors();
+        showToast(`Deleted "${name}"`);
       });
     });
     list.querySelectorAll(".alias-input").forEach(inp => {
@@ -6277,7 +6360,7 @@ function toggleBulkSelect(id, checked) {
 function renderBulkBar() {
   const bar = document.getElementById("bulkBar");
   if (!bar) return;
-  bar.hidden = bulkSelectedIds.size === 0;
+  bar.hidden = bulkSelectedIds.size < 2;
   if (bar.hidden) return;
   document.getElementById("bulkBarCount").textContent =
     `${bulkSelectedIds.size} selected`;
@@ -8613,7 +8696,7 @@ function renderCards() {
   // Apply same filters as list view
   const fStatus = (document.getElementById("filterStatus") || {}).value || "";
   const fOwner = ((document.getElementById("filterOwner") || {}).value || "").trim().toLowerCase();
-  const showCompleted = (document.getElementById("showCompleted") || {}).checked !== false;
+  const showCompleted = (document.getElementById("showCompleted") || {}).checked === true;
   const searchQ = searchQuery || "";
 
   const visible = tasks.filter(t => {
@@ -8654,9 +8737,11 @@ function renderCards() {
             t.due ? fmtDate(t.due) : "",
             t.owner ? "Owner: " + escapeHtml(t.owner) : ""
           ].filter(Boolean).join(" · ");
+          const isChecked = bulkSelectedIds.has(t.id) ? "checked" : "";
           return `<div class="card-task-item${t.status === "Complete" ? " complete" : ""}">
+            <input type="checkbox" class="card-bulk-cb" data-bulk-id="${t.id}" ${isChecked} title="Bulk select" style="flex-shrink:0;margin:0 4px 0 0;cursor:pointer;">
             <div class="card-task-dot" style="${dot}"></div>
-            <div class="card-task-body">
+            <div class="card-task-body" style="cursor:pointer;" onclick="openCardTaskModal('${t.id}')">
               <div class="card-task-name">${escapeHtml(t.task || "—")}</div>
               ${meta ? `<div class="card-task-meta">${meta}</div>` : ""}
             </div>
@@ -8674,6 +8759,63 @@ function renderCards() {
   }).join("");
 
   grid.innerHTML = html || `<div style="text-align:center;padding:40px;color:var(--text-muted);">No tasks to show.</div>`;
+
+  // Wire card checkboxes to bulk select
+  grid.querySelectorAll(".card-bulk-cb").forEach(cb => {
+    cb.addEventListener("change", () => toggleBulkSelect(cb.dataset.bulkId, cb.checked));
+  });
+}
+
+// ---- Card task edit modal ----
+let _cardEditId = null;
+
+function openCardTaskModal(id) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  _cardEditId = id;
+
+  document.getElementById("ctmTask").value = t.task || "";
+  document.getElementById("ctmStatus").value = t.status || "Incomplete";
+  document.getElementById("ctmImportance").value = String(t.importance || 0);
+  document.getElementById("ctmDue").value = t.due || "";
+  document.getElementById("ctmOwner").value = t.owner || "";
+  document.getElementById("ctmNext").value = t.next || "";
+  document.getElementById("ctmNotes").value = t.notes || "";
+
+  const sel = document.getElementById("ctmCustomer");
+  sel.innerHTML = `<option value="">— none —</option>` +
+    customers.map(c => `<option value="${escapeHtml(c)}"${t.customer === c ? " selected" : ""}>${escapeHtml(c)}</option>`).join("");
+  if (t.customer) sel.value = t.customer;
+
+  document.getElementById("cardTaskModal").style.display = "flex";
+}
+
+function closeCardTaskModal() {
+  document.getElementById("cardTaskModal").style.display = "none";
+  _cardEditId = null;
+}
+
+async function saveCardTaskModal() {
+  if (!_cardEditId) return;
+  const t = tasks.find(x => x.id === _cardEditId);
+  if (!t) return;
+
+  const wasComplete = t.status === "Complete";
+  t.task = document.getElementById("ctmTask").value.trim();
+  t.status = document.getElementById("ctmStatus").value;
+  t.importance = Number(document.getElementById("ctmImportance").value) || 0;
+  t.due = document.getElementById("ctmDue").value || null;
+  t.owner = document.getElementById("ctmOwner").value.trim();
+  t.customer = document.getElementById("ctmCustomer").value;
+  t.next = document.getElementById("ctmNext").value.trim();
+  t.notes = document.getElementById("ctmNotes").value.trim();
+  if (t.status === "Complete" && !wasComplete) t.completedAt = new Date().toISOString();
+  stampTaskUpdated(t);
+
+  closeCardTaskModal();
+  await persist();
+  render();
+  renderCards();
 }
 </script>
 
